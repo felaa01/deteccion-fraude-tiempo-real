@@ -119,13 +119,21 @@ Hecho:
   temporal en tres partes: entrenamiento/validación/prueba (`src/fraude/entrenamiento/division.py`),
   con pruebas unitarias.
 - Primer notebook de análisis exploratorio (`notebooks/01_analisis_exploratorio.py`, jupytext).
+- Métrica de costo de negocio (`entrenamiento/costo.py`) y características básicas "sin historia"
+  (`entrenamiento/caracteristicas_basicas.py`).
+- Línea base de reglas por monto (`entrenamiento/linea_base.py`) y modelo LightGBM
+  (`entrenamiento/modelo.py`), con selección de umbral por costo en validación.
+- MLflow en Docker (perfil `entrenamiento`, `make mlflow-arriba` / `make mlflow-abajo`), con
+  artefactos servidos vía proxy (`mlflow-artifacts:/`). Límite de memoria: 1536 MB (ver
+  presupuesto de recursos en el README).
+- Script de orquestación `entrenamiento/entrenar.py` (`make entrenar`) corrido contra el dataset
+  completo: línea base costo USD 179.037 vs LightGBM costo USD 87.052 (-51%), PR-AUC 0,8661.
+  Modelo registrado en MLflow como `deteccion-fraude-lightgbm`, alias `campeon` en la versión 1.
 
-Próximos pasos (semana 1):
-1. Línea base de reglas simples (por ejemplo, umbral de monto o categoría) para tener un piso de
-   comparación.
-2. Modelo de gradient boosting sobre las características crudas disponibles, con partición
-   temporal ya armada.
-3. Métrica de costo de negocio y selección de umbral (nunca accuracy), todo registrado en MLflow
-   corriendo en local en un contenedor con límite de memoria.
+Próximos pasos (semana 2, según el plan):
+1. Modelo en PyTorch, comparar contra el campeón LightGBM con la misma métrica de costo.
+2. Selección de umbral y servicio FastAPI en Docker.
+3. Configurar el repo remoto en GitHub cuando haga falta abrir el primer PR real (todavía no se
+   hizo — el trabajo hasta acá quedó en commits locales en la rama `semana-1/...`).
 
 Actualizá esta sección cada vez que se complete un hito.
