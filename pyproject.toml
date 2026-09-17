@@ -1,0 +1,57 @@
+[project]
+name = "deteccion-fraude-tiempo-real"
+version = "0.1.0"
+description = "Detección de fraude con tarjetas en tiempo real, con características en streaming, feature store y reentrenamiento automático."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3",
+    "pre-commit>=4.6",
+    "pytest>=9.1",
+    "pytest-cov>=7.1",
+    "ruff>=0.16",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fraude"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "pruebas"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",  # pycodestyle
+    "F",       # pyflakes
+    "I",       # orden de imports
+    "B",       # bugbear
+    "UP",      # pyupgrade
+    "SIM",     # simplificaciones
+    "N",       # nombres
+    "RUF",     # reglas propias de ruff
+    "PT",      # estilo de pytest
+    "ANN",     # anotaciones de tipos
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "pruebas"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["pruebas"]
+python_files = ["prueba_*.py"]
+python_functions = ["prueba_*"]
+addopts = "-ra --strict-markers --cov=fraude --cov-report=term-missing"
+markers = [
+    "integracion: pruebas que necesitan servicios en ejecución, como Kafka o Redis (fuera del CI)",
+]

@@ -1,0 +1,10 @@
+# Guardar como C:\Users\<tu-usuario>\.wslconfig
+# Aplicar los cambios desde PowerShell con:  wsl --shutdown
+
+[wsl2]
+# RAM máxima para WSL (Ubuntu + Docker). Deja unos 3 GB para Windows.
+# Si Windows se pone lento, bajar a 4GB. Si los contenedores se cierran por falta de memoria, subir a 5.5GB.
+memory=5GB
+
+# Swap en disco como red de seguridad cuando se acaba la memoria (más lento, pero evita cierres).
+swap=8GB

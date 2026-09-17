@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secretos y configuración local
+.env
+CLAUDE.local.md
+
+# Los datos y artefactos nunca se versionan
+datos/*
+!datos/.gitkeep
+mlruns/
+mlartifacts/
+*.parquet
+*.csv
