@@ -1,8 +1,13 @@
-"""Orquesta el entrenamiento de la semana 1: línea base, LightGBM y registro en MLflow.
+"""Orquesta el entrenamiento: línea base, LightGBM y PyTorch, y los compara contra el campeón
+vigente en el registro de MLflow.
 
 Se corre manualmente por ahora (`uv run python -m fraude.entrenamiento.entrenar`). Más
 adelante esto lo dispara el DAG semanal de Airflow, con las etiquetas disponibles hasta
 ese momento.
+
+Ambos candidatos (LightGBM y PyTorch) se comparan contra el costo del campeón vigente en el
+registro de MLflow (regla de negocio no negociable: un modelo solo se promueve si reduce ese
+costo). Ninguno de los dos se auto-promueve: mover el alias `campeon` es siempre un paso manual.
 """
 
 import os
@@ -10,10 +15,12 @@ from pathlib import Path
 
 import mlflow
 import mlflow.lightgbm
+import mlflow.pytorch
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 from dotenv import load_dotenv
+from mlflow.exceptions import MlflowException
 from sklearn.metrics import average_precision_score
 
 import fraude
@@ -23,11 +30,16 @@ from fraude.entrenamiento.costo import costo_total, elegir_umbral
 from fraude.entrenamiento.division import dividir_temporalmente
 from fraude.entrenamiento.linea_base import elegir_umbral_de_monto
 from fraude.entrenamiento.modelo import entrenar, predecir_probabilidad
+from fraude.entrenamiento.modelo_pytorch import Preprocesador, entrenar_red
+from fraude.entrenamiento.modelo_pytorch import predecir_probabilidad as predecir_probabilidad_red
 
 COSTO_REVISION = 10.0
 NOMBRE_EXPERIMENTO = "deteccion-fraude"
-NOMBRE_MODELO_REGISTRADO = "deteccion-fraude-lightgbm"
+# Un solo registered model para las dos arquitecturas: los alias campeon/retador de MLflow
+# apuntan a versiones dentro de un mismo modelo registrado, aunque tengan flavors distintos.
+NOMBRE_MODELO_REGISTRADO = "deteccion-fraude"
 ALIAS_CAMPEON = "campeon"
+ALIAS_RETADOR = "retador"
 
 
 def _raiz_repo() -> Path:
@@ -61,7 +73,7 @@ def _correr_lightgbm(
     monto_validacion: npt.NDArray[np.float64],
     es_fraude_prueba: npt.NDArray[np.bool_],
     monto_prueba: npt.NDArray[np.float64],
-) -> None:
+) -> float:
     with mlflow.start_run(run_name="lightgbm"):
         modelo = entrenar(entrenamiento)
         probabilidad_validacion = predecir_probabilidad(modelo, validacion)
@@ -83,7 +95,7 @@ def _correr_lightgbm(
         mlflow.log_metric("costo_validacion", umbral.costo)
         mlflow.log_metric("costo_prueba", costo_prueba)
         mlflow.log_metric("pr_auc_prueba", float(pr_auc))
-        info_modelo = mlflow.lightgbm.log_model(
+        mlflow.lightgbm.log_model(
             modelo, name="modelo", registered_model_name=NOMBRE_MODELO_REGISTRADO
         )
         print(
@@ -91,11 +103,71 @@ def _correr_lightgbm(
             f"costo_prueba={costo_prueba:.2f} pr_auc={pr_auc:.4f}"
         )
 
+        return costo_prueba
+
+
+def _preprocesador_a_dict(preprocesador: Preprocesador) -> dict[str, object]:
+    return {
+        "medias": preprocesador.medias.tolist(),
+        "desvios": preprocesador.desvios.tolist(),
+        "vocabularios": preprocesador.vocabularios,
+    }
+
+
+def _correr_pytorch(
+    entrenamiento: pd.DataFrame,
+    validacion: pd.DataFrame,
+    prueba: pd.DataFrame,
+    es_fraude_validacion: npt.NDArray[np.bool_],
+    monto_validacion: npt.NDArray[np.float64],
+    es_fraude_prueba: npt.NDArray[np.bool_],
+    monto_prueba: npt.NDArray[np.float64],
+) -> float:
+    with mlflow.start_run(run_name="pytorch"):
+        modelo, preprocesador = entrenar_red(
+            entrenamiento,
+            validacion,
+            monto_validacion=monto_validacion,
+            costo_revision=COSTO_REVISION,
+        )
+        probabilidad_validacion = predecir_probabilidad_red(modelo, preprocesador, validacion)
+        umbral = elegir_umbral(
+            es_fraude_validacion,
+            probabilidad_validacion,
+            monto_validacion,
+            costo_revision=COSTO_REVISION,
+        )
+
+        probabilidad_prueba = predecir_probabilidad_red(modelo, preprocesador, prueba)
+        prediccion_prueba = probabilidad_prueba >= umbral.umbral
+        costo_prueba = costo_total(
+            es_fraude_prueba, prediccion_prueba, monto_prueba, COSTO_REVISION
+        )
+        pr_auc = average_precision_score(es_fraude_prueba, probabilidad_prueba)
+
+        mlflow.log_param("umbral_probabilidad", umbral.umbral)
+        mlflow.log_metric("costo_validacion", umbral.costo)
+        mlflow.log_metric("costo_prueba", costo_prueba)
+        mlflow.log_metric("pr_auc_prueba", float(pr_auc))
+        mlflow.log_dict(_preprocesador_a_dict(preprocesador), "preprocesador.json")
+        info_modelo = mlflow.pytorch.log_model(
+            modelo,
+            name="modelo",
+            registered_model_name=NOMBRE_MODELO_REGISTRADO,
+            serialization_format="pickle",
+        )
+        print(
+            f"PyTorch -> umbral={umbral.umbral:.3f} "
+            f"costo_prueba={costo_prueba:.2f} pr_auc={pr_auc:.4f}"
+        )
+
         if info_modelo.registered_model_version is not None:
             cliente = mlflow.MlflowClient()
             cliente.set_registered_model_alias(
-                NOMBRE_MODELO_REGISTRADO, ALIAS_CAMPEON, info_modelo.registered_model_version
+                NOMBRE_MODELO_REGISTRADO, ALIAS_RETADOR, info_modelo.registered_model_version
             )
+
+        return costo_prueba
 
 
 def main() -> None:
@@ -118,7 +190,7 @@ def main() -> None:
     monto_prueba: npt.NDArray[np.float64] = prueba["monto"].to_numpy()
 
     _correr_linea_base(es_fraude_validacion, monto_validacion, es_fraude_prueba, monto_prueba)
-    _correr_lightgbm(
+    costo_lightgbm = _correr_lightgbm(
         entrenamiento,
         validacion,
         prueba,
@@ -127,6 +199,51 @@ def main() -> None:
         es_fraude_prueba,
         monto_prueba,
     )
+    costo_pytorch = _correr_pytorch(
+        entrenamiento,
+        validacion,
+        prueba,
+        es_fraude_validacion,
+        monto_validacion,
+        es_fraude_prueba,
+        monto_prueba,
+    )
+
+    # Ninguna de las dos corridas mueve el alias 'campeon' (regla 7: un modelo solo se
+    # promueve si reduce el costo frente al campeón actual, y eso es una decisión manual,
+    # no algo que decida este script). Se compara contra el costo ya logueado del campeón
+    # vigente en el registro, sea cual sea su arquitectura.
+    cliente = mlflow.MlflowClient()
+    try:
+        version_campeon = cliente.get_model_version_by_alias(
+            NOMBRE_MODELO_REGISTRADO, ALIAS_CAMPEON
+        )
+        assert version_campeon.run_id is not None
+        costo_campeon_vigente = float(
+            cliente.get_run(version_campeon.run_id).data.metrics["costo_prueba"]
+        )
+        print(
+            f"Campeón vigente (registro MLflow, versión {version_campeon.version}) "
+            f"costo_prueba={costo_campeon_vigente:.2f}"
+        )
+    except MlflowException:
+        costo_campeon_vigente = float("inf")
+        print(f"Todavía no hay ningún modelo con el alias '{ALIAS_CAMPEON}' en el registro.")
+    print(f"LightGBM (esta corrida) costo_prueba={costo_lightgbm:.2f}")
+    print(f"PyTorch (esta corrida) costo_prueba={costo_pytorch:.2f}")
+
+    mejor_candidato, costo_mejor_candidato = min(
+        ("LightGBM", costo_lightgbm), ("PyTorch", costo_pytorch), key=lambda item: item[1]
+    )
+    if costo_mejor_candidato < costo_campeon_vigente:
+        print(
+            f"{mejor_candidato} reduce el costo frente al campeón vigente: promover el alias "
+            f"'{ALIAS_CAMPEON}' en el registro de MLflow queda como paso manual."
+        )
+    else:
+        print(
+            f"Ningún candidato mejora al campeón vigente: no se promueve nada a '{ALIAS_CAMPEON}'."
+        )
 
 
 if __name__ == "__main__":

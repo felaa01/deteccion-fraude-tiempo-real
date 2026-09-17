@@ -10,6 +10,7 @@ dependencies = [
     "numpy>=2.5.3",
     "pandas>=3.0.5",
     "scikit-learn>=1.9.1",
+    "torch>=2.14.0",
 ]
 
 [dependency-groups]
@@ -25,6 +26,16 @@ dev = [
     "pytest-cov>=7.1",
     "ruff>=0.16",
 ]
+
+[tool.uv.sources]
+# Rueda CPU-only de PyTorch: la version de PyPI trae dependencias CUDA de varios GB
+# que no sirven en esta maquina sin GPU y no entran en el presupuesto de disco/memoria.
+torch = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]

@@ -41,18 +41,35 @@ Prometheus/Grafana/Evidently._
   (`mlflow-artifacts:/` + `--artifacts-destination`), no con una ruta local directa: el cliente de
   MLflow corre en el host, no en el contenedor, así que necesita que el servidor intermedie la
   subida de artefactos en vez de escribir a un path que solo existe dentro del contenedor.
+- **PyTorch como retador:** red con embeddings para `categoria` y `genero` (variables numéricas
+  estandarizadas con media/desvío de train) y un MLP chico encima. El desbalance se maneja con
+  `pos_weight` en `BCEWithLogitsLoss` (el equivalente de PyTorch al `class_weight="balanced"` de
+  LightGBM), nunca remuestreando. La selección de época usa el costo de negocio en validación, igual
+  que el umbral. Rueda CPU-only de PyTorch (`tool.uv.sources` en `pyproject.toml`): la rueda de PyPI
+  trae dependencias CUDA de varios GB que no sirven sin GPU.
+- **Un solo registered model (`deteccion-fraude`) para las dos arquitecturas:** los alias
+  `campeon`/`retador` de MLflow apuntan a versiones dentro de un mismo modelo registrado, así que
+  hace falta un nombre neutral (no `-lightgbm`) para poder comparar campeón y retador con esos
+  alias sin importar el framework. La promoción de `campeon` es un paso manual (regla de negocio:
+  un retador solo se promueve si reduce el costo), no algo que decida solo el script de
+  entrenamiento.
 
 ## Resultados
 
 Evaluado sobre `fraudTest.csv` (conjunto de prueba final, nunca usado para elegir el umbral),
 con la matriz de costo de [Decisiones de diseño](#decisiones-de-diseño):
 
-| Métrica | Reglas (línea base) | Gradient boosting (LightGBM) | PyTorch |
+| Métrica | Reglas (línea base) | Gradient boosting (LightGBM) | PyTorch (campeón) |
 |---------|---------------------|-------------------------------|---------|
-| Umbral elegido en validación | monto ≥ USD 246,98 | probabilidad ≥ 0,720 | _Pendiente_ |
-| PR-AUC | — | 0,8661 | _Pendiente_ |
-| Costo de negocio (USD) | 179.037,29 | 87.051,60 (-51%) | _Pendiente_ |
+| Umbral elegido en validación | monto ≥ USD 246,98 | probabilidad ≥ 0,720 | probabilidad ≥ 0,930 |
+| PR-AUC | — | 0,8661 | 0,7867 |
+| Costo de negocio (USD) | 179.037,29 | 87.051,60 (-51% vs reglas) | 58.469,43 (-33% vs LightGBM) |
 | Latencia p99 | — | _Pendiente_ | _Pendiente_ |
+
+El retador de PyTorch tiene menor PR-AUC que LightGBM pero menor costo de negocio: eligió un
+umbral más conservador (0,930) que evita revisiones innecesarias sin perder tanto en los fraudes
+de mayor monto. Regla del proyecto: el costo de negocio manda, no el accuracy ni el AUC. Se
+promovió a `campeon` en el registro de MLflow (versión 3).
 
 ## Cómo ejecutarlo en local
 
