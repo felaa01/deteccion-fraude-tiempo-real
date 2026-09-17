@@ -35,6 +35,15 @@ class Preprocesador:
         return {columna: len(vocabulario) + 1 for columna, vocabulario in self.vocabularios.items()}
 
 
+def preprocesador_a_dict(preprocesador: Preprocesador) -> dict[str, object]:
+    """Representación JSON-serializable del preprocesador (para loguearlo como artefacto)."""
+    return {
+        "medias": preprocesador.medias.tolist(),
+        "desvios": preprocesador.desvios.tolist(),
+        "vocabularios": preprocesador.vocabularios,
+    }
+
+
 def ajustar_preprocesador(transacciones_entrenamiento: pd.DataFrame) -> Preprocesador:
     """Calcula media/desvío de las numéricas y el vocabulario de las categóricas en train."""
     numericas = transacciones_entrenamiento[COLUMNAS_NUMERICAS].to_numpy(dtype=np.float64)

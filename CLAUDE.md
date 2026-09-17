@@ -137,10 +137,32 @@ Hecho:
   dataset completo: costo USD 58.469 vs LightGBM USD 87.052 (-33%), PR-AUC 0,7867 (menor que
   LightGBM, pero manda el costo, no el AUC). Registered model renombrado de
   `deteccion-fraude-lightgbm` a `deteccion-fraude` (nombre neutral para alojar ambas
-  arquitecturas bajo los mismos alias). Promovido a `campeon` en la versión 3 tras confirmar
-  con el usuario (regla 7: el retador reduce el costo frente al campeón anterior).
+  arquitecturas bajo los mismos alias).
+- Corregido un bug real antes de mergear: `_correr_lightgbm` promovía su propia versión a
+  `campeon` sin condición en cada corrida, lo que iba a revertir en silencio cualquier
+  promoción manual del retador. Ahora ninguna corrida mueve el alias solo: se compara contra
+  el costo ya logueado de la versión que hoy tiene `campeon` (con fallback a infinito si
+  todavía no existe ninguna), y la promoción sigue siendo manual para las dos arquitecturas.
+- Wrapper pyfunc de MLflow (`entrenamiento/envoltorio_pyfunc.py`): LightGBM y PyTorch se
+  loguean con la misma interfaz `mlflow.pyfunc.PythonModel` (cada uno envolviendo su propia
+  lógica de predicción), para que el servicio siempre pueda hacer
+  `mlflow.pyfunc.load_model(...).predict(df)` sin importar la arquitectura detrás del alias
+  `campeon`. La versión 3 (PyTorch, logueada antes de este cambio con el flavor nativo) quedó
+  incompatible con la carga genérica — se repaqueteó como versión 7 (mismo código, misma
+  semilla, mismo costo) y se movió `campeon` ahí; fue una migración técnica, no una promoción
+  por costo.
+- Servicio FastAPI (`servicio/principal.py`, `servicio/modelo_actual.py`,
+  `servicio/esquemas.py`): `POST /predecir` calcula las características con la misma función
+  del entrenamiento (`agregar_caracteristicas_basicas`) y aplica el umbral logueado en el run
+  del campeón. Dockerizado (`despliegue/servicio/Dockerfile`, perfil `servicio` con `mlflow` +
+  `api`, `make servicio-arriba` / `make servicio-abajo`). MLflow necesitó
+  `--allowed-hosts localhost,mlflow:5000` porque rechaza por defecto el header `Host: mlflow`
+  que le llega desde el contenedor `api` (protección contra DNS rebinding). Validado de punta
+  a punta contra el dataset completo y contra los contenedores reales, no solo con mocks.
+  Memoria medida: `api` ~292 MB en reposo (límite 1024 MB).
 
-Próximos pasos (semana 2, según el plan):
-1. Selección de umbral y servicio FastAPI en Docker.
+Próximos pasos (semana 3, según el plan):
+1. Cálculo histórico de características con PySpark, definiciones de Feast con almacén offline
+   y joins point-in-time.
 
 Actualizá esta sección cada vez que se complete un hito.

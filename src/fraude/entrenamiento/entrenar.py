@@ -10,15 +10,18 @@ registro de MLflow (regla de negocio no negociable: un modelo solo se promueve s
 costo). Ninguno de los dos se auto-promueve: mover el alias `campeon` es siempre un paso manual.
 """
 
+import json
 import os
+import tempfile
 from pathlib import Path
 
+import joblib
 import mlflow
-import mlflow.lightgbm
-import mlflow.pytorch
+import mlflow.pyfunc
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+import torch
 from dotenv import load_dotenv
 from mlflow.exceptions import MlflowException
 from sklearn.metrics import average_precision_score
@@ -28,9 +31,10 @@ from fraude.entrenamiento.caracteristicas_basicas import agregar_caracteristicas
 from fraude.entrenamiento.carga import cargar_transacciones
 from fraude.entrenamiento.costo import costo_total, elegir_umbral
 from fraude.entrenamiento.division import dividir_temporalmente
+from fraude.entrenamiento.envoltorio_pyfunc import EnvoltorioLightGBM, EnvoltorioPyTorch
 from fraude.entrenamiento.linea_base import elegir_umbral_de_monto
 from fraude.entrenamiento.modelo import entrenar, predecir_probabilidad
-from fraude.entrenamiento.modelo_pytorch import Preprocesador, entrenar_red
+from fraude.entrenamiento.modelo_pytorch import entrenar_red, preprocesador_a_dict
 from fraude.entrenamiento.modelo_pytorch import predecir_probabilidad as predecir_probabilidad_red
 
 COSTO_REVISION = 10.0
@@ -95,23 +99,21 @@ def _correr_lightgbm(
         mlflow.log_metric("costo_validacion", umbral.costo)
         mlflow.log_metric("costo_prueba", costo_prueba)
         mlflow.log_metric("pr_auc_prueba", float(pr_auc))
-        mlflow.lightgbm.log_model(
-            modelo, name="modelo", registered_model_name=NOMBRE_MODELO_REGISTRADO
-        )
+        with tempfile.TemporaryDirectory() as directorio_temporal:
+            ruta_modelo = Path(directorio_temporal) / "modelo.joblib"
+            joblib.dump(modelo, ruta_modelo)
+            mlflow.pyfunc.log_model(
+                python_model=EnvoltorioLightGBM(),
+                artifacts={"modelo": str(ruta_modelo)},
+                name="modelo",
+                registered_model_name=NOMBRE_MODELO_REGISTRADO,
+            )
         print(
             f"LightGBM -> umbral={umbral.umbral:.3f} "
             f"costo_prueba={costo_prueba:.2f} pr_auc={pr_auc:.4f}"
         )
 
         return costo_prueba
-
-
-def _preprocesador_a_dict(preprocesador: Preprocesador) -> dict[str, object]:
-    return {
-        "medias": preprocesador.medias.tolist(),
-        "desvios": preprocesador.desvios.tolist(),
-        "vocabularios": preprocesador.vocabularios,
-    }
 
 
 def _correr_pytorch(
@@ -149,13 +151,17 @@ def _correr_pytorch(
         mlflow.log_metric("costo_validacion", umbral.costo)
         mlflow.log_metric("costo_prueba", costo_prueba)
         mlflow.log_metric("pr_auc_prueba", float(pr_auc))
-        mlflow.log_dict(_preprocesador_a_dict(preprocesador), "preprocesador.json")
-        info_modelo = mlflow.pytorch.log_model(
-            modelo,
-            name="modelo",
-            registered_model_name=NOMBRE_MODELO_REGISTRADO,
-            serialization_format="pickle",
-        )
+        with tempfile.TemporaryDirectory() as directorio_temporal:
+            ruta_modelo = Path(directorio_temporal) / "modelo.pt"
+            ruta_preprocesador = Path(directorio_temporal) / "preprocesador.json"
+            torch.save(modelo, ruta_modelo)
+            ruta_preprocesador.write_text(json.dumps(preprocesador_a_dict(preprocesador)))
+            info_modelo = mlflow.pyfunc.log_model(
+                python_model=EnvoltorioPyTorch(),
+                artifacts={"modelo": str(ruta_modelo), "preprocesador": str(ruta_preprocesador)},
+                name="modelo",
+                registered_model_name=NOMBRE_MODELO_REGISTRADO,
+            )
         print(
             f"PyTorch -> umbral={umbral.umbral:.3f} "
             f"costo_prueba={costo_prueba:.2f} pr_auc={pr_auc:.4f}"
