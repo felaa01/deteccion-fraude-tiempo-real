@@ -1,12 +1,13 @@
-"""Orquesta el entrenamiento: línea base, LightGBM (campeón) y PyTorch (retador) en MLflow.
+"""Orquesta el entrenamiento: línea base, LightGBM y PyTorch, y los compara contra el campeón
+vigente en el registro de MLflow.
 
 Se corre manualmente por ahora (`uv run python -m fraude.entrenamiento.entrenar`). Más
 adelante esto lo dispara el DAG semanal de Airflow, con las etiquetas disponibles hasta
 ese momento.
 
-El retador solo se compara contra el campeón (regla de negocio no negociable): si reduce el
-costo de prueba, la promoción del alias `campeon` en el registro de MLflow es un paso manual,
-no algo que este script haga solo.
+Ambos candidatos (LightGBM y PyTorch) se comparan contra el costo del campeón vigente en el
+registro de MLflow (regla de negocio no negociable: un modelo solo se promueve si reduce ese
+costo). Ninguno de los dos se auto-promueve: mover el alias `campeon` es siempre un paso manual.
 """
 
 import os
@@ -19,6 +20,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 from dotenv import load_dotenv
+from mlflow.exceptions import MlflowException
 from sklearn.metrics import average_precision_score
 
 import fraude
@@ -93,19 +95,13 @@ def _correr_lightgbm(
         mlflow.log_metric("costo_validacion", umbral.costo)
         mlflow.log_metric("costo_prueba", costo_prueba)
         mlflow.log_metric("pr_auc_prueba", float(pr_auc))
-        info_modelo = mlflow.lightgbm.log_model(
+        mlflow.lightgbm.log_model(
             modelo, name="modelo", registered_model_name=NOMBRE_MODELO_REGISTRADO
         )
         print(
             f"LightGBM -> umbral={umbral.umbral:.3f} "
             f"costo_prueba={costo_prueba:.2f} pr_auc={pr_auc:.4f}"
         )
-
-        if info_modelo.registered_model_version is not None:
-            cliente = mlflow.MlflowClient()
-            cliente.set_registered_model_alias(
-                NOMBRE_MODELO_REGISTRADO, ALIAS_CAMPEON, info_modelo.registered_model_version
-            )
 
         return costo_prueba
 
@@ -194,7 +190,7 @@ def main() -> None:
     monto_prueba: npt.NDArray[np.float64] = prueba["monto"].to_numpy()
 
     _correr_linea_base(es_fraude_validacion, monto_validacion, es_fraude_prueba, monto_prueba)
-    costo_campeon = _correr_lightgbm(
+    costo_lightgbm = _correr_lightgbm(
         entrenamiento,
         validacion,
         prueba,
@@ -203,7 +199,7 @@ def main() -> None:
         es_fraude_prueba,
         monto_prueba,
     )
-    costo_retador = _correr_pytorch(
+    costo_pytorch = _correr_pytorch(
         entrenamiento,
         validacion,
         prueba,
@@ -213,18 +209,41 @@ def main() -> None:
         monto_prueba,
     )
 
-    mejora_porcentual = (costo_campeon - costo_retador) / costo_campeon * 100
-    print(
-        f"Campeón (LightGBM) costo_prueba={costo_campeon:.2f} vs "
-        f"retador (PyTorch) costo_prueba={costo_retador:.2f} ({mejora_porcentual:+.1f}%)"
-    )
-    if costo_retador < costo_campeon:
+    # Ninguna de las dos corridas mueve el alias 'campeon' (regla 7: un modelo solo se
+    # promueve si reduce el costo frente al campeón actual, y eso es una decisión manual,
+    # no algo que decida este script). Se compara contra el costo ya logueado del campeón
+    # vigente en el registro, sea cual sea su arquitectura.
+    cliente = mlflow.MlflowClient()
+    try:
+        version_campeon = cliente.get_model_version_by_alias(
+            NOMBRE_MODELO_REGISTRADO, ALIAS_CAMPEON
+        )
+        assert version_campeon.run_id is not None
+        costo_campeon_vigente = float(
+            cliente.get_run(version_campeon.run_id).data.metrics["costo_prueba"]
+        )
         print(
-            "El retador reduce el costo de negocio: la promoción del alias 'campeon' "
-            "en el registro de MLflow queda como paso manual."
+            f"Campeón vigente (registro MLflow, versión {version_campeon.version}) "
+            f"costo_prueba={costo_campeon_vigente:.2f}"
+        )
+    except MlflowException:
+        costo_campeon_vigente = float("inf")
+        print(f"Todavía no hay ningún modelo con el alias '{ALIAS_CAMPEON}' en el registro.")
+    print(f"LightGBM (esta corrida) costo_prueba={costo_lightgbm:.2f}")
+    print(f"PyTorch (esta corrida) costo_prueba={costo_pytorch:.2f}")
+
+    mejor_candidato, costo_mejor_candidato = min(
+        ("LightGBM", costo_lightgbm), ("PyTorch", costo_pytorch), key=lambda item: item[1]
+    )
+    if costo_mejor_candidato < costo_campeon_vigente:
+        print(
+            f"{mejor_candidato} reduce el costo frente al campeón vigente: promover el alias "
+            f"'{ALIAS_CAMPEON}' en el registro de MLflow queda como paso manual."
         )
     else:
-        print("El retador no mejora al campeón: no se promueve.")
+        print(
+            f"Ningún candidato mejora al campeón vigente: no se promueve nada a '{ALIAS_CAMPEON}'."
+        )
 
 
 if __name__ == "__main__":
