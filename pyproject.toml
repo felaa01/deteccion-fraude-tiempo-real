@@ -5,16 +5,20 @@ description = "Detección de fraude con tarjetas en tiempo real, con caracterís
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "fastapi>=0.141.1",
+    "joblib>=1.6.0",
     "lightgbm>=4.7.0",
     "mlflow>=3.16.1",
     "numpy>=2.5.3",
     "pandas>=3.0.5",
     "scikit-learn>=1.9.1",
     "torch>=2.14.0",
+    "uvicorn[standard]>=0.53.0",
 ]
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "ipykernel>=7.3.0",
     "jupyterlab>=4.6.3",
     "jupytext>=1.19.5",
@@ -73,9 +77,9 @@ strict = true
 files = ["src", "pruebas"]
 mypy_path = "src"
 
-# scikit-learn no distribuye stubs ni un marcador py.typed.
+# scikit-learn y joblib no distribuyen stubs ni un marcador py.typed.
 [[tool.mypy.overrides]]
-module = "sklearn.*"
+module = ["sklearn.*", "joblib.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

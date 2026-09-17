@@ -51,8 +51,15 @@ Prometheus/Grafana/Evidently._
   `campeon`/`retador` de MLflow apuntan a versiones dentro de un mismo modelo registrado, así que
   hace falta un nombre neutral (no `-lightgbm`) para poder comparar campeón y retador con esos
   alias sin importar el framework. La promoción de `campeon` es un paso manual (regla de negocio:
-  un retador solo se promueve si reduce el costo), no algo que decida solo el script de
-  entrenamiento.
+  un retador solo se promueve si reduce el costo frente al campeón vigente en el registro), no
+  algo que decida solo el script de entrenamiento.
+- **Wrapper pyfunc de MLflow (`entrenamiento/envoltorio_pyfunc.py`):** LightGBM y PyTorch se
+  loguean con la misma interfaz `mlflow.pyfunc.PythonModel`, cada uno envolviendo su propia lógica
+  de `predict_proba`/sigmoide + preprocesador. Así el servicio de predicción siempre hace
+  `mlflow.pyfunc.load_model("models:/deteccion-fraude@campeon").predict(df)` sin necesitar saber
+  qué arquitectura hay detrás del alias — la alternativa (que el servicio inspeccione el flavor y
+  tenga una rama de carga por arquitectura) hubiera acoplado el serving a los detalles internos de
+  cada modelo.
 
 ## Resultados
 
@@ -69,7 +76,40 @@ con la matriz de costo de [Decisiones de diseño](#decisiones-de-diseño):
 El retador de PyTorch tiene menor PR-AUC que LightGBM pero menor costo de negocio: eligió un
 umbral más conservador (0,930) que evita revisiones innecesarias sin perder tanto en los fraudes
 de mayor monto. Regla del proyecto: el costo de negocio manda, no el accuracy ni el AUC. Se
-promovió a `campeon` en el registro de MLflow (versión 3).
+promovió a `campeon` en el registro de MLflow.
+
+> El campeón quedó en la versión 7, no la 3: la versión 3 se logueó con el flavor nativo de
+> PyTorch de MLflow, que asume un único tensor de entrada y no sabe nada de nuestro preprocesador
+> ni de las columnas categóricas — rompía al cargarlo genéricamente con
+> `mlflow.pyfunc.load_model`. La versión 7 es el mismo modelo (mismo código, misma semilla, mismo
+> costo de prueba) re-entrenado y logueado con el wrapper pyfunc nuevo. Fue una migración técnica
+> para poder servirlo, no una promoción por costo.
+
+## Servicio de predicción (FastAPI)
+
+`src/fraude/servicio/` expone el campeón vigente como una API HTTP:
+
+- `GET /salud`: chequeo de vida.
+- `POST /predecir`: recibe los campos crudos de una transacción (los mismos que necesita
+  `agregar_caracteristicas_basicas`, para no calcular la característica dos veces con lógica
+  distinta) y devuelve `probabilidad_fraude`, `es_fraude` (según el umbral que se eligió al
+  entrenar el campeón) y la versión del modelo que respondió.
+
+El modelo se carga una sola vez, al arrancar el proceso (`fraude.servicio.modelo_actual`); un
+campeón nuevo se toma recién en el próximo reinicio del servicio — el refresco en caliente es un
+problema de despliegue (semana 6, Kubernetes), no de esta API.
+
+```bash
+make servicio-arriba   # build + docker compose --profile servicio up -d (mlflow + api)
+curl -X POST localhost:8000/predecir -H 'Content-Type: application/json' -d '{...}'
+make servicio-abajo
+```
+
+**MLflow con `--allowed-hosts`:** el contenedor `api` le habla a MLflow como `http://mlflow:5000`
+(el nombre del servicio en la red de Docker, no `localhost`). Las versiones recientes de MLflow
+rechazan por defecto cualquier header `Host` que no sea `localhost` o una IP privada, como
+protección contra ataques de DNS rebinding — hubo que agregar `--allowed-hosts localhost,mlflow:5000`
+al comando del servidor para permitir explícitamente ese nombre.
 
 ## Cómo ejecutarlo en local
 
@@ -99,3 +139,5 @@ completa se hace en GitHub Codespaces.
 | Perfil de Docker Compose | Contenedor | Límite | Uso medido |
 |---------------------------|-----------|--------|------------|
 | `entrenamiento` | `mlflow` | 1536 MB | Se estabiliza contra el límite (`docker stats` incluye caché de página, no solo memoria real). Con 512-768 MB entraba en un loop de reinicios (`RestartCount` subiendo) al loguear un modelo LightGBM real; con los 4 workers por defecto de `mlflow server` la presión era aún mayor — se bajó a `--workers 1`. |
+| `servicio` | `mlflow` | 1536 MB | Igual que en `entrenamiento`: solo hace falta para que la API cargue el campeón al arrancar. |
+| `servicio` | `api` | 1024 MB | ~292 MB en reposo (`docker stats`), con PyTorch y LightGBM cargados en memoria. Queda margen: no se ajustó a la baja para no arriesgar OOM cuando lleguen ráfagas de pedidos concurrentes. |

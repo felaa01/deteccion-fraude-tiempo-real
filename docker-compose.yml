@@ -2,13 +2,19 @@ services:
   # Perfil "entrenamiento": MLflow para registrar experimentos y modelos.
   # Backend store en SQLite y artefactos en disco local: alcanza para uso en
   # solitario y evita sumar un contenedor de Postgres solo para esto.
+  #
+  # También corre en el perfil "servicio": la API necesita hablarle a MLflow para
+  # cargar el modelo con el alias `campeon` al arrancar.
   mlflow:
     image: ghcr.io/mlflow/mlflow:v3.16.1
-    profiles: ["entrenamiento"]
+    profiles: ["entrenamiento", "servicio"]
     ports:
       - "5000:5000"
     volumes:
       - ./mlruns:/mlflow
+    # --allowed-hosts mlflow: el contenedor "api" del perfil "servicio" le habla como
+    # "http://mlflow:5000"; sin este flag, MLflow rechaza el request por su protección
+    # contra DNS rebinding (el header Host no es "localhost" ni una IP privada).
     command: >
       mlflow server
       --backend-store-uri sqlite:////mlflow/mlflow.db
@@ -17,5 +23,21 @@ services:
       --host 0.0.0.0
       --port 5000
       --workers 1
+      --allowed-hosts localhost,mlflow:5000
     mem_limit: 1536m
+    restart: unless-stopped
+
+  # Perfil "servicio": API FastAPI que sirve al campeón vigente del registro de MLflow.
+  api:
+    build:
+      context: .
+      dockerfile: despliegue/servicio/Dockerfile
+    profiles: ["servicio"]
+    ports:
+      - "8000:8000"
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    depends_on:
+      - mlflow
+    mem_limit: 1024m
     restart: unless-stopped
