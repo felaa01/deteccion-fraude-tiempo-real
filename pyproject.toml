@@ -4,11 +4,22 @@ version = "0.1.0"
 description = "Detección de fraude con tarjetas en tiempo real, con características en streaming, feature store y reentrenamiento automático."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "lightgbm>=4.7.0",
+    "mlflow>=3.16.1",
+    "numpy>=2.5.3",
+    "pandas>=3.0.5",
+    "scikit-learn>=1.9.1",
+]
 
 [dependency-groups]
 dev = [
+    "ipykernel>=7.3.0",
+    "jupyterlab>=4.6.3",
+    "jupytext>=1.19.5",
+    "matplotlib>=3.11.2",
     "mypy>=2.3",
+    "pandas-stubs>=3.0.5.260914",
     "pre-commit>=4.6",
     "pytest>=9.1",
     "pytest-cov>=7.1",
@@ -26,6 +37,10 @@ packages = ["src/fraude"]
 line-length = 100
 target-version = "py312"
 src = ["src", "pruebas"]
+# notebooks/ es EDA exploratorio (jupytext), con idioms propios de Jupyter
+# (expresiones sueltas para mostrar resultados): no se le exige el mismo estándar
+# de lint que a src/ y pruebas/.
+extend-exclude = ["notebooks"]
 
 [tool.ruff.lint]
 select = [
@@ -47,6 +62,11 @@ strict = true
 files = ["src", "pruebas"]
 mypy_path = "src"
 
+# scikit-learn no distribuye stubs ni un marcador py.typed.
+[[tool.mypy.overrides]]
+module = "sklearn.*"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["pruebas"]
 python_files = ["prueba_*.py"]
@@ -55,3 +75,8 @@ addopts = "-ra --strict-markers --cov=fraude --cov-report=term-missing"
 markers = [
     "integracion: pruebas que necesitan servicios en ejecución, como Kafka o Redis (fuera del CI)",
 ]
+
+[tool.coverage.run]
+# entrenar.py orquesta el entrenamiento real (datos + MLflow corriendo): es glue
+# de integración, no lógica para probar con datos chicos en memoria.
+omit = ["src/fraude/entrenamiento/entrenar.py"]
