@@ -129,11 +129,11 @@ Hecho:
 - Script de orquestación `entrenamiento/entrenar.py` (`make entrenar`) corrido contra el dataset
   completo: línea base costo USD 179.037 vs LightGBM costo USD 87.052 (-51%), PR-AUC 0,8661.
   Modelo registrado en MLflow como `deteccion-fraude-lightgbm`, alias `campeon` en la versión 1.
+- Repo remoto en GitHub (público): https://github.com/felaa01/deteccion-fraude-tiempo-real.
+  Semana 1 mergeada a `main` vía PR #1. Flujo validado: rama por hito → PR → merge.
 
 Próximos pasos (semana 2, según el plan):
 1. Modelo en PyTorch, comparar contra el campeón LightGBM con la misma métrica de costo.
 2. Selección de umbral y servicio FastAPI en Docker.
-3. Configurar el repo remoto en GitHub cuando haga falta abrir el primer PR real (todavía no se
-   hizo — el trabajo hasta acá quedó en commits locales en la rama `semana-1/...`).
 
 Actualizá esta sección cada vez que se complete un hito.
