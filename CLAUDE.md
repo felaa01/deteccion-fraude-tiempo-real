@@ -113,13 +113,19 @@ Hecho:
 - Esqueleto del repositorio con ruff, mypy estricto, pytest con cobertura, pre-commit y CI en
   GitHub Actions.
 - Estructura de paquetes en `src/fraude/` según el plan, con una prueba mínima.
+- Repo movido a WSL2 (`~/proyectos/deteccion-fraude-tiempo-real`), git inicializado.
+- Dataset de Kaggle (kartik2112/fraud-detection, Sparkov) descargado en `datos/`.
+- Carga y renombre de columnas al español (`src/fraude/entrenamiento/carga.py`) y partición
+  temporal en tres partes: entrenamiento/validación/prueba (`src/fraude/entrenamiento/division.py`),
+  con pruebas unitarias.
+- Primer notebook de análisis exploratorio (`notebooks/01_analisis_exploratorio.py`, jupytext).
 
 Próximos pasos (semana 1):
-1. Verificar con el usuario que el entorno de `docs/configuracion/` esté instalado.
-2. Descargar de Kaggle el "Credit Card Transactions Fraud Detection Dataset" (Sparkov) en `datos/`
-   (no se versiona), renombrar las columnas al español y hacer el análisis exploratorio.
-3. Partición temporal, línea base de reglas y modelo de gradient boosting, métrica de costo de
-   negocio y selección de umbral, todo registrado en MLflow (corriendo en local en un contenedor
-   con límite de memoria).
+1. Línea base de reglas simples (por ejemplo, umbral de monto o categoría) para tener un piso de
+   comparación.
+2. Modelo de gradient boosting sobre las características crudas disponibles, con partición
+   temporal ya armada.
+3. Métrica de costo de negocio y selección de umbral (nunca accuracy), todo registrado en MLflow
+   corriendo en local en un contenedor con límite de memoria.
 
 Actualizá esta sección cada vez que se complete un hito.

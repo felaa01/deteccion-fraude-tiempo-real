@@ -13,7 +13,19 @@ Prometheus/Grafana/Evidently._
 
 ## Decisiones de diseño
 
-_Se documentan a medida que avanza el proyecto._
+- **Dataset:** "Credit Card Transactions Fraud Detection Dataset" (generado con Sparkov,
+  [kartik2112/fraud-detection](https://www.kaggle.com/datasets/kartik2112/fraud-detection) en
+  Kaggle). 1.852.394 transacciones, ~0,5% de fraude. Las columnas originales del CSV se renombran
+  al español al cargarlas (ver `src/fraude/entrenamiento/carga.py`).
+- **Partición temporal en tres partes:** Kaggle ya separa `fraudTrain.csv` (2019-01 a 2020-06) de
+  `fraudTest.csv` (2020-06 a 2020-12) de forma cronológica. `fraudTrain.csv` se corta además en
+  entrenamiento (hasta 2019-10) y validación (2019-11 en adelante), para poder elegir el umbral de
+  costo y comparar campeón/retador sin tocar nunca el conjunto de prueba final
+  (`src/fraude/entrenamiento/division.py`). Nunca se mezcla ni se muestrea al azar.
+- **EDA en notebook versionado con jupytext:** `notebooks/01_analisis_exploratorio.py` (formato
+  `.py` porcentaje) en vez de `.ipynb`, para que los diffs de git sean legibles. Queda fuera del
+  lint/mypy estricto de `src/` y `pruebas/` porque tiene idioms propios de Jupyter (expresiones
+  sueltas para mostrar resultados).
 
 ## Resultados
 
@@ -30,6 +42,18 @@ cp .env.ejemplo .env
 make instalar
 make verificar
 ```
+
+### Datos
+
+El dataset no se versiona. Se descarga de Kaggle (requiere una cuenta y un token de la API en
+`~/.kaggle/access_token`):
+
+```bash
+uv tool install kaggle
+kaggle datasets download -d kartik2112/fraud-detection -p datos/ --unzip
+```
+
+Para abrir el notebook de EDA: `uv run jupyter lab notebooks/` (jupytext lo abre como notebook).
 
 ## Presupuesto de recursos
 

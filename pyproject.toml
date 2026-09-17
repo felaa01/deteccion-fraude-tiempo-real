@@ -4,11 +4,18 @@ version = "0.1.0"
 description = "Detección de fraude con tarjetas en tiempo real, con características en streaming, feature store y reentrenamiento automático."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "pandas>=3.0.5",
+]
 
 [dependency-groups]
 dev = [
+    "ipykernel>=7.3.0",
+    "jupyterlab>=4.6.3",
+    "jupytext>=1.19.5",
+    "matplotlib>=3.11.2",
     "mypy>=2.3",
+    "pandas-stubs>=3.0.5.260914",
     "pre-commit>=4.6",
     "pytest>=9.1",
     "pytest-cov>=7.1",
@@ -26,6 +33,10 @@ packages = ["src/fraude"]
 line-length = 100
 target-version = "py312"
 src = ["src", "pruebas"]
+# notebooks/ es EDA exploratorio (jupytext), con idioms propios de Jupyter
+# (expresiones sueltas para mostrar resultados): no se le exige el mismo estándar
+# de lint que a src/ y pruebas/.
+extend-exclude = ["notebooks"]
 
 [tool.ruff.lint]
 select = [
