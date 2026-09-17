@@ -128,12 +128,19 @@ Hecho:
   presupuesto de recursos en el README).
 - Script de orquestación `entrenamiento/entrenar.py` (`make entrenar`) corrido contra el dataset
   completo: línea base costo USD 179.037 vs LightGBM costo USD 87.052 (-51%), PR-AUC 0,8661.
-  Modelo registrado en MLflow como `deteccion-fraude-lightgbm`, alias `campeon` en la versión 1.
 - Repo remoto en GitHub (público): https://github.com/felaa01/deteccion-fraude-tiempo-real.
   Semana 1 mergeada a `main` vía PR #1. Flujo validado: rama por hito → PR → merge.
+- Modelo retador en PyTorch (`entrenamiento/modelo_pytorch.py`): MLP con embeddings para
+  `categoria` y `genero`, `pos_weight` en `BCEWithLogitsLoss` para el desbalance (nunca
+  remuestrear), selección de época por costo en validación. Dependencia CPU-only
+  (`tool.uv.sources` en `pyproject.toml`, evita las ruedas CUDA de PyPI). Corrido contra el
+  dataset completo: costo USD 58.469 vs LightGBM USD 87.052 (-33%), PR-AUC 0,7867 (menor que
+  LightGBM, pero manda el costo, no el AUC). Registered model renombrado de
+  `deteccion-fraude-lightgbm` a `deteccion-fraude` (nombre neutral para alojar ambas
+  arquitecturas bajo los mismos alias). Promovido a `campeon` en la versión 3 tras confirmar
+  con el usuario (regla 7: el retador reduce el costo frente al campeón anterior).
 
 Próximos pasos (semana 2, según el plan):
-1. Modelo en PyTorch, comparar contra el campeón LightGBM con la misma métrica de costo.
-2. Selección de umbral y servicio FastAPI en Docker.
+1. Selección de umbral y servicio FastAPI en Docker.
 
 Actualizá esta sección cada vez que se complete un hito.
