@@ -1,4 +1,4 @@
-.PHONY: instalar lint formatear tipos pruebas verificar mlflow-arriba mlflow-abajo entrenar servicio-arriba servicio-abajo
+.PHONY: instalar lint formatear tipos pruebas verificar mlflow-arriba mlflow-abajo entrenar servicio-arriba servicio-abajo calcular-historico
 
 instalar:
 	uv sync
@@ -27,6 +27,9 @@ mlflow-abajo:
 
 entrenar:
 	uv run python -m fraude.entrenamiento.entrenar
+
+calcular-historico:
+	uv run python -m fraude.lotes.calcular_historico
 
 servicio-arriba:
 	docker compose --profile servicio up -d --build

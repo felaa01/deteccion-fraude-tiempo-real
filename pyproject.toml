@@ -73,6 +73,11 @@ select = [
     "ANN",     # anotaciones de tipos
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# `from pyspark.sql import functions as F` es la convención universal de PySpark
+# (así la usan la propia documentación y prácticamente todo el ecosistema).
+"src/fraude/lotes/*.py" = ["N812"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
@@ -94,6 +99,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-# entrenar.py orquesta el entrenamiento real (datos + MLflow corriendo): es glue
-# de integración, no lógica para probar con datos chicos en memoria.
-omit = ["src/fraude/entrenamiento/entrenar.py"]
+# entrenar.py y calcular_historico.py orquestan procesos reales (datos + MLflow /
+# Spark sobre el dataset completo): son glue de integración, no lógica para probar
+# con datos chicos en memoria.
+omit = ["src/fraude/entrenamiento/entrenar.py", "src/fraude/lotes/calcular_historico.py"]
