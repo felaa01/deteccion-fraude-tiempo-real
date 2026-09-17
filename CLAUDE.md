@@ -160,9 +160,27 @@ Hecho:
   que le llega desde el contenedor `api` (protección contra DNS rebinding). Validado de punta
   a punta contra el dataset completo y contra los contenedores reales, no solo con mocks.
   Memoria medida: `api` ~292 MB en reposo (límite 1024 MB).
+- Cálculo histórico de características con PySpark
+  (`lotes/caracteristicas_historicas.py`, `make calcular-historico`), sobre `fraudTrain` +
+  `fraudTest` concatenados: conteos de transacciones en 10 min/1 h/24 h por tarjeta, monto
+  acumulado, ratio contra el promedio histórico y bandera de categoría nueva. Point-in-time por
+  diseño: las ventanas excluyen siempre la fila actual, así el valor guardado para la
+  transacción T ya es lo que un servicio en producción sabría justo antes de T. Definiciones de
+  Feast (`src/fraude/caracteristicas/`) con almacén offline Parquet (`type: file`) y `RepoConfig`
+  armado en código en vez de `feature_store.yaml`; función de join point-in-time para armar
+  datasets de entrenamiento (`caracteristicas/dataset_entrenamiento.py`). Agregadas las
+  dependencias `pyspark` y `feast`; hubo que bajar `pandas` a `<3` porque Feast (incluso 0.66, la
+  última) todavía no lo soporta -- sin ese tope, `uv` resolvía en silencio una versión de Feast de
+  2022 (0.20.0). Bug real encontrado validando el join contra el dataset completo (no solo con
+  datos sintéticos): `to_timestamp` de Spark usa la zona horaria de *sesión* si no se fija a UTC
+  explícitamente, lo que en esta máquina (UTC-3) corría los timestamps del Parquet 3 horas y
+  rompía en silencio el join de Feast -- no se notaba dentro de una misma sesión de Spark, porque
+  `to_timestamp` seguido de `toPandas()` se cancela solo. Prueba de regresión agregada
+  (`pruebas/prueba_calcular_historico.py`).
 
-Próximos pasos (semana 3, según el plan):
-1. Cálculo histórico de características con PySpark, definiciones de Feast con almacén offline
-   y joins point-in-time.
+Próximos pasos (semana 4, según el plan):
+1. Kafka en modo KRaft, Spark Structured Streaming, push a Redis (almacén online de Feast),
+   características en el momento de la solicitud en el servicio, y la prueba de
+   training-serving skew (offline vs. online).
 
 Actualizá esta sección cada vez que se complete un hito.
