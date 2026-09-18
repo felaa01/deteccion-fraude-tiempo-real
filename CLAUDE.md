@@ -186,6 +186,14 @@ Hecho:
   años respecto de la fecha (2013 vs 2020): el event time es `fecha_hora_transaccion`. Validado contra
   el broker real: 0 tarjetas en más de una partición, 0 transacciones fuera de orden.
 
+  Estado por tarjeta (`caracteristicas/estado_tarjeta.py`): funciones puras `actualizar_estado`
+  (streaming, idempotente) y `calcular_caracteristicas` (momento de la solicitud), sin Spark/Redis/Feast.
+  Redis guarda el estado crudo (marcas y montos de las últimas 24 h, acumulado, categorías), no los
+  conteos ya calculados, porque estos dependen de la hora de la solicitud. Decisiones: el estado vive
+  solo en Redis (Spark lo lee y lo actualiza en `foreachBatch`), Feast como capa de acceso y el arranque
+  en frío materializa el estado al final de `fraudTrain`. Prueba de skew unitaria contra el batch de
+  Spark (600 transacciones con empates de segundo y huecos de más de 24 h): pasa.
+
 Próximos pasos (resto de la semana 4, según el plan):
 1. Spark Structured Streaming, push a Redis (almacén online de Feast),
    características en el momento de la solicitud en el servicio, y la prueba de

@@ -17,9 +17,12 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
-SEGUNDOS_10_MINUTOS = 10 * 60
-SEGUNDOS_1_HORA = 60 * 60
-SEGUNDOS_24_HORAS = 24 * 60 * 60
+# Las ventanas se definen una sola vez, en la ruta online, para que no se puedan desalinear.
+from fraude.caracteristicas.estado_tarjeta import (
+    SEGUNDOS_1_HORA,
+    SEGUNDOS_10_MINUTOS,
+    SEGUNDOS_24_HORAS,
+)
 
 
 def agregar_caracteristicas_historicas(transacciones: DataFrame) -> DataFrame:
