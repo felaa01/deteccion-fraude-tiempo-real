@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 from pyspark.sql import SparkSession
 
-from fraude.lotes.calcular_historico import _cargar_transacciones
+from fraude.lotes.comun import cargar_transacciones
 
 ENCABEZADO = (
     ",trans_date_trans_time,cc_num,merchant,category,amt,first,last,gender,street,"
@@ -33,7 +33,7 @@ def prueba_no_corre_los_timestamps_por_la_zona_horaria_del_sistema(
     ruta_csv.write_text(ENCABEZADO + "\n" + FILA + "\n")
     ruta_parquet = tmp_path / "salida.parquet"
 
-    transacciones = _cargar_transacciones(sesion_spark, [ruta_csv])
+    transacciones = cargar_transacciones(sesion_spark, [ruta_csv])
     transacciones.write.mode("overwrite").parquet(str(ruta_parquet))
     resultado = pd.read_parquet(ruta_parquet)
 

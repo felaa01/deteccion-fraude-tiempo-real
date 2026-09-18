@@ -201,9 +201,17 @@ Hecho:
   transacción de una tarjeta en el mismo segundo; se usa `skip_dedup=True` (verificado con una
   prueba que falla si se apaga). Las pruebas de integración usan la base 1 de Redis.
 
+  Arranque en frío (`make arranque-en-frio`): Spark calcula el estado por tarjeta al corte de
+  `fraudTrain` (`lotes/estado_inicial.py`, agregaciones propias, segunda implementación
+  independiente de `actualizar_estado`) a Parquet y Feast lo materializa en Redis
+  (`caracteristicas/arranque_en_frio.py`). Validado con datos reales: 983 de 983 tarjetas idénticas
+  al estado secuencial sobre 1.296.675 transacciones (~32 s, ~436 MB de RSS). Los helpers de Spark
+  compartidos quedaron en `lotes/comun.py`. `categorias_vistas` es siempre una tupla ordenada
+  (forma canónica).
+
 Próximos pasos (resto de la semana 4, según el plan):
-1. Arranque en frío (materializar el estado al final de fraudTrain), job de Spark Structured
-   Streaming con `foreachBatch`, características en el momento de la solicitud en el servicio y la
-   prueba de training-serving skew de punta a punta.
+1. Job de Spark Structured Streaming con `foreachBatch` (lee de Kafka, actualiza el estado en
+   Redis), características en el momento de la solicitud en el servicio y la prueba de
+   training-serving skew de punta a punta.
 
 Actualizá esta sección cada vez que se complete un hito.

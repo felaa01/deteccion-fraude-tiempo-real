@@ -56,6 +56,10 @@ class EstadoTarjeta:
     las últimas 24 horas (la ventana más larga); el resto de la historia solo sobrevive
     como `cantidad_total` y `monto_total`. Así el tamaño del estado por tarjeta está
     acotado por la actividad de un día y no crece con la historia.
+
+    `categorias_vistas` está siempre ordenada alfabéticamente: es la forma canónica, para que
+    el estado calculado por lotes (arranque en frío) y el calculado transacción a transacción
+    (streaming) se puedan comparar por igualdad sin depender del orden de aparición.
     """
 
     cantidad_total: int
@@ -115,7 +119,7 @@ def actualizar_estado(
     ]
     categorias = estado.categorias_vistas
     if transaccion.categoria not in categorias:
-        categorias = (*categorias, transaccion.categoria)
+        categorias = tuple(sorted((*categorias, transaccion.categoria)))
     return EstadoTarjeta(
         cantidad_total=estado.cantidad_total + 1,
         monto_total=estado.monto_total + transaccion.monto,

@@ -1,4 +1,4 @@
-.PHONY: instalar lint formatear tipos pruebas verificar mlflow-arriba mlflow-abajo entrenar servicio-arriba servicio-abajo calcular-historico tiempo-real-arriba tiempo-real-abajo kafka-crear-topico productor
+.PHONY: instalar lint formatear tipos pruebas verificar mlflow-arriba mlflow-abajo entrenar servicio-arriba servicio-abajo calcular-historico tiempo-real-arriba tiempo-real-abajo kafka-crear-topico productor arranque-en-frio
 
 instalar:
 	uv sync
@@ -51,3 +51,9 @@ kafka-crear-topico:
 # Reproduce fraudTest en Kafka. Ejemplo: make productor ARGS="--aceleracion 0 --limite 1000"
 productor:
 	uv run python -m fraude.productor.publicar $(ARGS)
+
+# Estado por tarjeta al corte de fraudTrain: Spark lo calcula a Parquet y Feast lo materializa
+# en Redis. Necesita Redis arriba (make tiempo-real-arriba).
+arranque-en-frio:
+	uv run python -m fraude.lotes.calcular_estado_inicial
+	uv run python -m fraude.caracteristicas.arranque_en_frio

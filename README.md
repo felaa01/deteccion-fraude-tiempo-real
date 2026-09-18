@@ -187,6 +187,29 @@ streaming.
 - **Sin `ttl`** en la vista: un `ttl` haría que Feast devolviera nulos para tarjetas inactivas y
   el servicio las trataría como nuevas.
 
+### Arranque en frío
+
+Antes de reproducir `fraudTest`, el almacén online tiene que arrancar con la historia de cada
+tarjeta al corte de `fraudTrain`; si no, los contadores no coincidirían con los offline (que se
+calcularon sobre todo el histórico). Es el patrón real de producción: el lote aporta la historia y
+el streaming solo aplica lo nuevo.
+
+```bash
+make tiempo-real-arriba
+make arranque-en-frio   # Spark calcula el estado a Parquet y Feast lo materializa en Redis
+```
+
+- **Segunda implementación, independiente.** El lote (`lotes/estado_inicial.py`) calcula el estado
+  con agregaciones de Spark; el streaming lo va a calcular fila a fila con `actualizar_estado`. Que
+  las dos coincidan es evidencia de que no hay un bug compartido.
+- **Validado con los datos reales:** las 983 tarjetas de `fraudTrain` (1.296.675 transacciones)
+  quedaron en Redis idénticas al estado que da aplicar `actualizar_estado` fila a fila (0 faltantes,
+  0 distintas; los montos se comparan con tolerancia relativa de 1e-9 porque Spark y Python suman en
+  distinto orden). Acotar el estado a 24 h lo mantiene chico: máximo 15 transacciones recientes por
+  tarjeta, 4 en promedio.
+- `categorias_vistas` se guarda ordenada alfabéticamente: es la forma canónica, para poder comparar
+  por igualdad sin depender del orden de aparición.
+
 ## Cómo ejecutarlo en local
 
 ```bash
@@ -219,4 +242,5 @@ completa se hace en GitHub Codespaces.
 | `servicio` | `api` | 1024 MB | ~292 MB en reposo (`docker stats`), con PyTorch y LightGBM cargados en memoria. Queda margen: no se ajustó a la baja para no arriesgar OOM cuando lleguen ráfagas de pedidos concurrentes. |
 | `tiempo-real` | `kafka` (KRaft, un nodo) | 1024 MB (heap JVM `-Xmx512m`) | ~394 MB en reposo con el tópico `transacciones` creado (`docker stats`). |
 | `tiempo-real` | `redis` (8.8, almacén online de Feast) | 256 MB (`maxmemory 192mb`, `noeviction`) | ~6 MB en reposo. Solo guarda el estado de ~1.000 tarjetas. |
+| _(sin Docker, script directo)_ | `make arranque-en-frio` (Spark `local[4]` + `materialize`) | `spark.driver.memory=2g` | ~436 MB de RSS pico (`/usr/bin/time -v`), ~32 s sobre 1.296.675 filas de `fraudTrain` (Spark + materialización a Redis). |
 | _(sin Docker, script directo)_ | `make calcular-historico` (JVM de Spark, `local[4]`) | `spark.driver.memory=2g` | ~415 MB de RSS medidos a mitad de corrida (`ps`), lejos del límite de 2 GB. Corre en ~16-20 s sobre 1.852.394 filas. `local[4]`, no `local[*]`: no hace falta acaparar los 12 núcleos de la máquina para un dataset de este tamaño. |
