@@ -178,8 +178,16 @@ Hecho:
   `to_timestamp` seguido de `toPandas()` se cancela solo. Prueba de regresión agregada
   (`pruebas/prueba_calcular_historico.py`).
 
-Próximos pasos (semana 4, según el plan):
-1. Kafka en modo KRaft, Spark Structured Streaming, push a Redis (almacén online de Feast),
+- Semana 4, en curso (rama `semana-4/kafka-streaming`): broker de Kafka 4.3.1 en KRaft (perfil
+  `tiempo-real`, `make kafka-arriba`, tópico `transacciones` con 3 particiones, ~394 MB) y productor
+  (`src/fraude/productor/`, `make productor`) con `confluent-kafka`: reproduce `fraudTest` ordenado por
+  fecha (desempate por `id_transaccion`), clave = `numero_tarjeta`, ritmo acelerado agendado contra el
+  inicio. El mensaje excluye `es_fraude` y datos personales. `unix_time` del dataset está desfasado 7
+  años respecto de la fecha (2013 vs 2020): el event time es `fecha_hora_transaccion`. Validado contra
+  el broker real: 0 tarjetas en más de una partición, 0 transacciones fuera de orden.
+
+Próximos pasos (resto de la semana 4, según el plan):
+1. Spark Structured Streaming, push a Redis (almacén online de Feast),
    características en el momento de la solicitud en el servicio, y la prueba de
    training-serving skew (offline vs. online).
 

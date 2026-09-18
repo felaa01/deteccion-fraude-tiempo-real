@@ -143,6 +143,31 @@ rechazan por defecto cualquier header `Host` que no sea `localhost` o una IP pri
 protección contra ataques de DNS rebinding — hubo que agregar `--allowed-hosts localhost,mlflow:5000`
 al comando del servidor para permitir explícitamente ese nombre.
 
+## Flujo en tiempo real (Kafka)
+
+Perfil `tiempo-real` de Docker Compose. Se levanta de a un subsistema por vez (no junto con MLflow
+ni con el servicio).
+
+```bash
+make kafka-arriba         # broker de Kafka en modo KRaft, un solo nodo
+make kafka-crear-topico   # tópico `transacciones`, 3 particiones
+make productor ARGS="--limite 2000"   # reproduce fraudTest acelerado (x3600 por defecto)
+make kafka-abajo
+```
+
+- **Clave del mensaje = `numero_tarjeta`.** Kafka solo garantiza orden dentro de una partición, y la
+  partición sale del hash de la clave: todas las transacciones de una tarjeta se consumen en el
+  orden en que ocurrieron, que es lo que necesitan las ventanas por tarjeta.
+- **El mensaje no lleva `es_fraude`** (las etiquetas llegan con demora, regla 6) ni datos personales
+  que ninguna característica use.
+- **El tiempo del evento es `fecha_hora_transaccion`.** La columna `unix_time` del dataset está
+  desfasada exactamente 7 años (2013 contra 2020) y no se usa.
+- **Ritmo acelerado** (`--aceleracion`, segundos simulados por segundo real; 0 = sin esperas). Cada
+  mensaje se agenda contra el inicio de la reproducción, no como "esperar la diferencia con el
+  anterior", para que el error de cada `sleep` no se acumule. Verificado: 41.768 s simulados a x3600
+  tardaron 11,6 s reales.
+- Publicar dos veces sin recrear el tópico duplica los mensajes.
+
 ## Cómo ejecutarlo en local
 
 ```bash

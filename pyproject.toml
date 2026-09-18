@@ -5,6 +5,7 @@ description = "Detección de fraude con tarjetas en tiempo real, con caracterís
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "confluent-kafka>=2.15.1",
     "fastapi>=0.141.1",
     "feast>=0.66.0",
     "joblib>=1.6.0",
