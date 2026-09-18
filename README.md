@@ -60,6 +60,38 @@ Prometheus/Grafana/Evidently._
   qué arquitectura hay detrás del alias — la alternativa (que el servicio inspeccione el flavor y
   tenga una rama de carga por arquitectura) hubiera acoplado el serving a los detalles internos de
   cada modelo.
+- **`pandas<3` por Feast:** Feast (incluso la última versión, 0.66) todavía tope a `pandas<3`. Sin
+  ese tope en `pyproject.toml`, `uv` resolvía en silencio una versión de Feast de 2022 (0.20.0) para
+  poder convivir con `pandas>=3` de la semana 1, en vez de fallar fuerte — con años de API vieja y
+  un downgrade de `protobuf` de paso. Se bajó `pandas` a `<3` para poder usar el Feast actual; no hay
+  código que dependa de una API específica de pandas 3.x.
+- **Características históricas point-in-time excluyendo la fila actual
+  (`src/fraude/lotes/caracteristicas_historicas.py`):** las ventanas de Spark (conteos en 10 min/1
+  h/24 h, monto acumulado, promedio) miran solo transacciones *estrictamente anteriores* de la
+  misma tarjeta, nunca la fila que se está procesando. Así, el valor guardado para la transacción T
+  ya es "lo que un servicio en producción sabría justo antes de T", y el join point-in-time de
+  Feast (que matchea por `event_timestamp <= tiempo de la entidad`, inclusive) cae solo en la
+  propia fila de T sin necesitar un desfasaje adicional en el join.
+- **El histórico se calcula sobre `fraudTrain` + `fraudTest` concatenados:** la historia de cada
+  tarjeta es continua más allá del corte de train/test que se usa para el modelado; cortarla ahí
+  arrancaría la ventana de cada tarjeta a mitad de su historia real. No hay fuga de información
+  porque cada fila solo mira hacia atrás, dentro de su propia tarjeta.
+- **`RepoConfig` de Feast armado en código, sin `feature_store.yaml`**
+  (`src/fraude/caracteristicas/tienda.py`): no hay ninguna razón para depender de un archivo con
+  rutas relativas cuando el proyecto ya sabe, en Python, dónde viven el registro y los datos.
+  Almacén offline `type: file` (Parquet); almacén online sqlite como placeholder porque Feast lo
+  exige igual para aplicar las definiciones, aunque todavía no se usa (llega en la semana 4, con el
+  push a Redis desde Spark Streaming).
+- **Bug real encontrado validando contra el dataset completo, no con datos sintéticos:**
+  `to_timestamp` en Spark interpreta el string con la zona horaria de *sesión* (por default, la del
+  sistema — UTC-3 en esta máquina). Sin fijarla a `UTC` explícitamente, el Parquet quedaba con todos
+  los timestamps corridos 3 horas respecto del string original. El join point-in-time de Feast
+  (armado con pandas, que no aplica ese corrimiento) dejaba de encontrar coincidencias exactas y
+  perdía filas en silencio — sin ningún error. Se manifestaba solo al cruzar la frontera
+  Spark→Parquet→pandas/Feast, nunca dentro de una misma sesión de Spark (`to_timestamp` seguido de
+  `toPandas()` se cancela solo, aunque la zona horaria esté mal). Prueba de regresión en
+  `pruebas/prueba_calcular_historico.py`, que escribe a Parquet real y relee con pandas en vez de
+  comparar contra el propio `toPandas()` de Spark.
 
 ## Resultados
 
@@ -141,3 +173,4 @@ completa se hace en GitHub Codespaces.
 | `entrenamiento` | `mlflow` | 1536 MB | Se estabiliza contra el límite (`docker stats` incluye caché de página, no solo memoria real). Con 512-768 MB entraba en un loop de reinicios (`RestartCount` subiendo) al loguear un modelo LightGBM real; con los 4 workers por defecto de `mlflow server` la presión era aún mayor — se bajó a `--workers 1`. |
 | `servicio` | `mlflow` | 1536 MB | Igual que en `entrenamiento`: solo hace falta para que la API cargue el campeón al arrancar. |
 | `servicio` | `api` | 1024 MB | ~292 MB en reposo (`docker stats`), con PyTorch y LightGBM cargados en memoria. Queda margen: no se ajustó a la baja para no arriesgar OOM cuando lleguen ráfagas de pedidos concurrentes. |
+| _(sin Docker, script directo)_ | `make calcular-historico` (JVM de Spark, `local[4]`) | `spark.driver.memory=2g` | ~415 MB de RSS medidos a mitad de corrida (`ps`), lejos del límite de 2 GB. Corre en ~16-20 s sobre 1.852.394 filas. `local[4]`, no `local[*]`: no hace falta acaparar los 12 núcleos de la máquina para un dataset de este tamaño. |

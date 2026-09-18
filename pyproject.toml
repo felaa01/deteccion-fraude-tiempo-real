@@ -6,11 +6,13 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.141.1",
+    "feast>=0.66.0",
     "joblib>=1.6.0",
     "lightgbm>=4.7.0",
     "mlflow>=3.16.1",
     "numpy>=2.5.3",
-    "pandas>=3.0.5",
+    "pandas>=2.2,<3",
+    "pyspark>=4.2.0",
     "scikit-learn>=1.9.1",
     "torch>=2.14.0",
     "uvicorn[standard]>=0.53.0",
@@ -24,7 +26,7 @@ dev = [
     "jupytext>=1.19.5",
     "matplotlib>=3.11.2",
     "mypy>=2.3",
-    "pandas-stubs>=3.0.5.260914",
+    "pandas-stubs>=2.3,<3",
     "pre-commit>=4.6",
     "pytest>=9.1",
     "pytest-cov>=7.1",
@@ -71,6 +73,11 @@ select = [
     "ANN",     # anotaciones de tipos
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# `from pyspark.sql import functions as F` es la convención universal de PySpark
+# (así la usan la propia documentación y prácticamente todo el ecosistema).
+"src/fraude/lotes/*.py" = ["N812"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
@@ -92,6 +99,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-# entrenar.py orquesta el entrenamiento real (datos + MLflow corriendo): es glue
-# de integración, no lógica para probar con datos chicos en memoria.
-omit = ["src/fraude/entrenamiento/entrenar.py"]
+# entrenar.py y calcular_historico.py orquestan procesos reales (datos + MLflow /
+# Spark sobre el dataset completo): son glue de integración, no lógica para probar
+# con datos chicos en memoria.
+omit = ["src/fraude/entrenamiento/entrenar.py", "src/fraude/lotes/calcular_historico.py"]

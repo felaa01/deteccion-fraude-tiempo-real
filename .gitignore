@@ -15,6 +15,7 @@ CLAUDE.local.md
 # Los datos y artefactos nunca se versionan
 datos/*
 !datos/.gitkeep
+datos_features/
 mlruns/
 mlartifacts/
 *.parquet
