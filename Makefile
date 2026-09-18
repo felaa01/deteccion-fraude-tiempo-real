@@ -1,4 +1,4 @@
-.PHONY: instalar lint formatear tipos pruebas verificar mlflow-arriba mlflow-abajo entrenar servicio-arriba servicio-abajo calcular-historico kafka-arriba kafka-abajo kafka-crear-topico productor
+.PHONY: instalar lint formatear tipos pruebas verificar mlflow-arriba mlflow-abajo entrenar servicio-arriba servicio-abajo calcular-historico tiempo-real-arriba tiempo-real-abajo kafka-crear-topico productor
 
 instalar:
 	uv sync
@@ -37,10 +37,11 @@ servicio-arriba:
 servicio-abajo:
 	docker compose --profile servicio down
 
-kafka-arriba:
-	docker compose --profile tiempo-real up -d kafka
+# Perfil "tiempo-real": Kafka + Redis (el job de Spark corre en el host con uv).
+tiempo-real-arriba:
+	docker compose --profile tiempo-real up -d
 
-kafka-abajo:
+tiempo-real-abajo:
 	docker compose --profile tiempo-real down
 
 kafka-crear-topico:

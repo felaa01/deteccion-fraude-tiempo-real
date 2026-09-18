@@ -145,14 +145,14 @@ al comando del servidor para permitir explícitamente ese nombre.
 
 ## Flujo en tiempo real (Kafka)
 
-Perfil `tiempo-real` de Docker Compose. Se levanta de a un subsistema por vez (no junto con MLflow
-ni con el servicio).
+Perfil `tiempo-real` de Docker Compose (Kafka + Redis). Se levanta de a un subsistema por vez (no
+junto con MLflow ni con el servicio).
 
 ```bash
-make kafka-arriba         # broker de Kafka en modo KRaft, un solo nodo
+make tiempo-real-arriba   # Kafka en modo KRaft (un nodo) + Redis, el almacén online de Feast
 make kafka-crear-topico   # tópico `transacciones`, 3 particiones
 make productor ARGS="--limite 2000"   # reproduce fraudTest acelerado (x3600 por defecto)
-make kafka-abajo
+make tiempo-real-abajo
 ```
 
 - **Clave del mensaje = `numero_tarjeta`.** Kafka solo garantiza orden dentro de una partición, y la
@@ -167,6 +167,25 @@ make kafka-abajo
   anterior", para que el error de cada `sleep` no se acumule. Verificado: 41.768 s simulados a x3600
   tardaron 11,6 s reales.
 - Publicar dos veces sin recrear el tópico duplica los mensajes.
+
+### Estado por tarjeta en Redis (Feast online)
+
+Redis no guarda "cuántas transacciones tuvo la tarjeta en las últimas 24 h" ya calculado: ese
+número depende de la hora de la transacción que se autoriza, que todavía no existe cuando se
+actualiza el almacén. Guarda el **estado crudo** de cada tarjeta (`EstadoTarjeta`: marcas y
+montos de las últimas 24 h, acumulado histórico y categorías vistas) y el servicio calcula las
+ventanas al recibir el pedido. Es la vista `estado_tarjeta` de Feast, con un `PushSource` para el
+streaming.
+
+- **`skip_dedup=True` en el almacén Redis de Feast.** Por defecto Feast descarta un write con
+  timestamp *menor o igual* al guardado; dos transacciones de una tarjeta en el mismo segundo
+  harían que se perdiera la segunda. La protección contra valores viejos ya la da
+  `actualizar_estado` (idempotente por `(marca, id)`) y hay un único escritor. Hay una prueba de
+  regresión que falla si se apaga.
+- **`noeviction` + AOF.** Si Redis se llena, rechaza escrituras en vez de borrar tarjetas en
+  silencio, y el estado sobrevive a un reinicio.
+- **Sin `ttl`** en la vista: un `ttl` haría que Feast devolviera nulos para tarjetas inactivas y
+  el servicio las trataría como nuevas.
 
 ## Cómo ejecutarlo en local
 
@@ -199,4 +218,5 @@ completa se hace en GitHub Codespaces.
 | `servicio` | `mlflow` | 1536 MB | Igual que en `entrenamiento`: solo hace falta para que la API cargue el campeón al arrancar. |
 | `servicio` | `api` | 1024 MB | ~292 MB en reposo (`docker stats`), con PyTorch y LightGBM cargados en memoria. Queda margen: no se ajustó a la baja para no arriesgar OOM cuando lleguen ráfagas de pedidos concurrentes. |
 | `tiempo-real` | `kafka` (KRaft, un nodo) | 1024 MB (heap JVM `-Xmx512m`) | ~394 MB en reposo con el tópico `transacciones` creado (`docker stats`). |
+| `tiempo-real` | `redis` (8.8, almacén online de Feast) | 256 MB (`maxmemory 192mb`, `noeviction`) | ~6 MB en reposo. Solo guarda el estado de ~1.000 tarjetas. |
 | _(sin Docker, script directo)_ | `make calcular-historico` (JVM de Spark, `local[4]`) | `spark.driver.memory=2g` | ~415 MB de RSS medidos a mitad de corrida (`ps`), lejos del límite de 2 GB. Corre en ~16-20 s sobre 1.852.394 filas. `local[4]`, no `local[*]`: no hace falta acaparar los 12 núcleos de la máquina para un dataset de este tamaño. |

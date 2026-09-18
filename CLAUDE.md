@@ -179,7 +179,7 @@ Hecho:
   (`pruebas/prueba_calcular_historico.py`).
 
 - Semana 4, en curso (rama `semana-4/kafka-streaming`): broker de Kafka 4.3.1 en KRaft (perfil
-  `tiempo-real`, `make kafka-arriba`, tópico `transacciones` con 3 particiones, ~394 MB) y productor
+  `tiempo-real`, `make tiempo-real-arriba`, tópico `transacciones` con 3 particiones, ~394 MB) y productor
   (`src/fraude/productor/`, `make productor`) con `confluent-kafka`: reproduce `fraudTest` ordenado por
   fecha (desempate por `id_transaccion`), clave = `numero_tarjeta`, ritmo acelerado agendado contra el
   inicio. El mensaje excluye `es_fraude` y datos personales. `unix_time` del dataset está desfasado 7
@@ -194,9 +194,16 @@ Hecho:
   en frío materializa el estado al final de `fraudTrain`. Prueba de skew unitaria contra el batch de
   Spark (600 transacciones con empates de segundo y huecos de más de 24 h): pasa.
 
+  Redis 8.8 en el perfil `tiempo-real` (256 MB, `noeviction`, AOF) como almacén online de Feast:
+  vista `estado_tarjeta` con `PushSource` (`caracteristicas/definiciones.py`), `crear_tienda_online`
+  (`tienda.py`) y `escribir_estados`/`leer_estados` (`almacen_estado.py`). Hallazgo: el almacén Redis
+  de Feast descarta writes con timestamp menor o igual al guardado, lo que perdería la segunda
+  transacción de una tarjeta en el mismo segundo; se usa `skip_dedup=True` (verificado con una
+  prueba que falla si se apaga). Las pruebas de integración usan la base 1 de Redis.
+
 Próximos pasos (resto de la semana 4, según el plan):
-1. Spark Structured Streaming, push a Redis (almacén online de Feast),
-   características en el momento de la solicitud en el servicio, y la prueba de
-   training-serving skew (offline vs. online).
+1. Arranque en frío (materializar el estado al final de fraudTrain), job de Spark Structured
+   Streaming con `foreachBatch`, características en el momento de la solicitud en el servicio y la
+   prueba de training-serving skew de punta a punta.
 
 Actualizá esta sección cada vez que se complete un hito.
