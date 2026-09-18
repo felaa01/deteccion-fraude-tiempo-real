@@ -210,6 +210,41 @@ make arranque-en-frio   # Spark calcula el estado a Parquet y Feast lo materiali
 - `categorias_vistas` se guarda ordenada alfabéticamente: es la forma canónica, para poder comparar
   por igualdad sin depender del orden de aparición.
 
+### Streaming: Kafka -> Spark -> Redis
+
+Job de Spark Structured Streaming (`tiempo_real/streaming_estado.py`) que lee el tópico y mantiene
+el estado por tarjeta en Redis. Corre en el host con `uv`; el broker y Redis, en Docker.
+
+```bash
+make tiempo-real-arriba && make kafka-crear-topico && make arranque-en-frio
+make productor ARGS="--aceleracion 0"        # publica fraudTest
+make streaming ARGS="--hasta-agotar"         # procesa lo que hay y termina (sin el flag, queda escuchando)
+make streaming-reiniciar                     # vuelve a cero: tópico, checkpoint y estado de Redis
+```
+
+- **El estado vive solo en Redis; Spark lo lee y lo actualiza en `foreachBatch`.** Por cada
+  micro-lote: se leen los estados de las tarjetas involucradas, se aplican sus transacciones en orden
+  y se escribe el resultado (`tiempo_real/lote_estado.py`, separado de Spark para poder probarlo solo).
+  Se descartó el operador con estado de Spark (`transformWithState`): habría dos copias del estado que
+  pueden divergir, más el checkpoint de estado, en una máquina de 5 GB.
+- **Al menos una vez, pero idempotente.** Structured Streaming puede repetir un lote tras una falla;
+  `actualizar_estado` ignora lo ya aplicado (compara `(marca, id)`), y una tarjeta cuyo lote entero ya
+  estaba aplicado ni se vuelve a escribir. Una prueba de integración relee el tópico completo con un
+  checkpoint nuevo y verifica que el estado no cambie.
+- **La fecha se interpreta como UTC de forma explícita** (se le agrega `Z` antes de parsear), sin
+  depender de la zona horaria de la sesión de Spark: es el bug que corrompió los timestamps en la
+  semana 3, con una prueba de regresión que cambia la zona de la sesión.
+- Un mensaje que no es JSON válido no rompe el lote: se descarta, se cuenta y se registra un aviso.
+- `maxOffsetsPerTrigger=10000` acota el tamaño de cada lote (y la memoria del driver) cuando hay
+  mucho atrasado en el tópico. El conector (`spark-sql-kafka-0-10_2.13:4.2.0`) coincide con la
+  versión de Spark y la de Scala del PySpark instalado; Spark lo baja de Maven Central.
+
+**Validación con los datos reales.** Arranque en frío desde `fraudTrain` + las 555.719 transacciones
+de `fraudTest` por Kafka (56 micro-lotes, 61 s con `--aceleracion 0`): el estado final en Redis es
+**idéntico** al que calcula el batch de Spark sobre `fraudTrain` + `fraudTest` juntos, para las 999
+tarjetas (0 faltantes, 0 distintas). 16 de ellas solo aparecen en `fraudTest`: el streaming las crea
+desde cero y también coinciden.
+
 ## Cómo ejecutarlo en local
 
 ```bash
@@ -242,5 +277,6 @@ completa se hace en GitHub Codespaces.
 | `servicio` | `api` | 1024 MB | ~292 MB en reposo (`docker stats`), con PyTorch y LightGBM cargados en memoria. Queda margen: no se ajustó a la baja para no arriesgar OOM cuando lleguen ráfagas de pedidos concurrentes. |
 | `tiempo-real` | `kafka` (KRaft, un nodo) | 1024 MB (heap JVM `-Xmx512m`) | ~394 MB en reposo con el tópico `transacciones` creado (`docker stats`). |
 | `tiempo-real` | `redis` (8.8, almacén online de Feast) | 256 MB (`maxmemory 192mb`, `noeviction`) | ~6 MB en reposo. Solo guarda el estado de ~1.000 tarjetas. |
+| _(sin Docker, script directo)_ | `make streaming` (Spark `local[4]`, driver 1 GB, conector de Kafka) | `spark.driver.memory=1g` | ~500 MB de RSS pico procesando `fraudTest` completo (555.719 mensajes, 56 lotes, 61 s). En modo continuo: JVM de Spark ~560 MB + Python ~464 MB. Todo el subsistema `tiempo-real` junto (Kafka ~435 MB + Redis ~10 MB + job): ~1,5 GB, dentro del presupuesto de 3-4 GB. |
 | _(sin Docker, script directo)_ | `make arranque-en-frio` (Spark `local[4]` + `materialize`) | `spark.driver.memory=2g` | ~436 MB de RSS pico (`/usr/bin/time -v`), ~32 s sobre 1.296.675 filas de `fraudTrain` (Spark + materialización a Redis). |
 | _(sin Docker, script directo)_ | `make calcular-historico` (JVM de Spark, `local[4]`) | `spark.driver.memory=2g` | ~415 MB de RSS medidos a mitad de corrida (`ps`), lejos del límite de 2 GB. Corre en ~16-20 s sobre 1.852.394 filas. `local[4]`, no `local[*]`: no hace falta acaparar los 12 núcleos de la máquina para un dataset de este tamaño. |

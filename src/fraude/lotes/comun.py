@@ -1,5 +1,6 @@
 """Piezas compartidas por los jobs por lotes de PySpark."""
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from pyspark.sql import DataFrame, SparkSession
@@ -8,17 +9,27 @@ from pyspark.sql import functions as F
 from fraude.entrenamiento.carga import COLUMNAS_EN_ESPANOL
 
 
-def crear_sesion_spark(nombre: str) -> SparkSession:
+def crear_sesion_spark(
+    nombre: str, paquetes: Sequence[str] = (), memoria_driver: str = "2g"
+) -> SparkSession:
+    """Sesión local de Spark. `paquetes` son coordenadas Maven (ej. el conector de Kafka).
+
+    Los paquetes solo se aplican si la sesión se crea en este llamado: `getOrCreate` devuelve
+    la sesión existente, ignorando la configuración nueva, por eso los jobs que los necesitan
+    corren en su propio proceso.
+    """
     # `local[4]`, no `local[*]`: máquina de 8 GB (WSL limitado a 5 GB, sin GPU), y este
     # job corre junto con lo demás que uno tenga abierto -- no hace falta acaparar todos
     # los núcleos para un dataset de ~1,8 millones de filas.
-    return (
+    constructor = (
         SparkSession.builder.appName(nombre)
         .master("local[4]")
-        .config("spark.driver.memory", "2g")
+        .config("spark.driver.memory", memoria_driver)
         .config("spark.sql.shuffle.partitions", "8")
-        .getOrCreate()
     )
+    if paquetes:
+        constructor = constructor.config("spark.jars.packages", ",".join(paquetes))
+    return constructor.getOrCreate()
 
 
 def cargar_transacciones(spark: SparkSession, rutas_csv: list[Path]) -> DataFrame:

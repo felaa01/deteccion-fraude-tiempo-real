@@ -1,9 +1,7 @@
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from feast import FeatureStore, Project
-from redis import Redis
 
 from fraude.caracteristicas.almacen_estado import (
     escribir_estados,
@@ -36,14 +34,6 @@ def _estado() -> EstadoTarjeta:
     estado = actualizar_estado(None, TransaccionTarjeta("tx_1", 1_600_000_000, 10.5, "comida"))
     estado = actualizar_estado(estado, TransaccionTarjeta("tx_2", 1_600_000_060, 20.25, "ropa"))
     return actualizar_estado(estado, TransaccionTarjeta("tx_3", 1_600_000_060, 5.0, "comida"))
-
-
-@pytest.fixture
-def redis_de_prueba() -> Iterator[None]:
-    cliente = Redis(host="localhost", port=6379, db=1)
-    cliente.flushdb()
-    yield
-    cliente.flushdb()
 
 
 def _tienda_de_prueba(directorio: Path) -> FeatureStore:

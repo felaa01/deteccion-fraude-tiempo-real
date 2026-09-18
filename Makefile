@@ -1,4 +1,4 @@
-.PHONY: instalar lint formatear tipos pruebas verificar mlflow-arriba mlflow-abajo entrenar servicio-arriba servicio-abajo calcular-historico tiempo-real-arriba tiempo-real-abajo kafka-crear-topico productor arranque-en-frio
+.PHONY: instalar lint formatear tipos pruebas verificar mlflow-arriba mlflow-abajo entrenar servicio-arriba servicio-abajo calcular-historico tiempo-real-arriba tiempo-real-abajo kafka-crear-topico productor arranque-en-frio streaming kafka-reiniciar-topico streaming-reiniciar
 
 instalar:
 	uv sync
@@ -57,3 +57,20 @@ productor:
 arranque-en-frio:
 	uv run python -m fraude.lotes.calcular_estado_inicial
 	uv run python -m fraude.caracteristicas.arranque_en_frio
+
+# Job de Spark Structured Streaming: Kafka -> estado por tarjeta en Redis. Corre en el host con
+# uv. Ejemplo: make streaming ARGS="--hasta-agotar" (procesa lo que hay y termina).
+streaming:
+	uv run python -m fraude.tiempo_real.streaming_estado $(ARGS)
+
+kafka-reiniciar-topico:
+	docker compose --profile tiempo-real exec kafka /opt/kafka/bin/kafka-topics.sh \
+		--bootstrap-server localhost:9092 --delete --topic transacciones --if-exists
+	sleep 3
+	$(MAKE) kafka-crear-topico
+
+# Vuelve todo al punto de partida para una corrida limpia: tópico vacío, sin checkpoint (los
+# offsets guardados no valen para un tópico nuevo) y el estado de Redis al corte de fraudTrain.
+streaming-reiniciar: kafka-reiniciar-topico
+	rm -rf datos_features/checkpoint_streaming
+	$(MAKE) arranque-en-frio

@@ -79,6 +79,7 @@ select = [
 # `from pyspark.sql import functions as F` es la convención universal de PySpark
 # (así la usan la propia documentación y prácticamente todo el ecosistema).
 "src/fraude/lotes/*.py" = ["N812"]
+"src/fraude/tiempo_real/*.py" = ["N812"]
 
 [tool.mypy]
 python_version = "3.12"

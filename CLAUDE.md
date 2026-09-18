@@ -209,9 +209,17 @@ Hecho:
   compartidos quedaron en `lotes/comun.py`. `categorias_vistas` es siempre una tupla ordenada
   (forma canónica).
 
+  Job de Spark Structured Streaming (`tiempo_real/streaming_estado.py`, `make streaming`): lee el
+  tópico y, en `foreachBatch`, lee el estado de las tarjetas del lote desde Redis, aplica las
+  transacciones en orden con `actualizar_estado` y escribe (`tiempo_real/lote_estado.py`). Al menos
+  una vez pero idempotente. La fecha se parsea como UTC explícito (`Z`), sin depender de la tz de la
+  sesión. Validado con datos reales: arranque en frío + `fraudTest` completo por Kafka (555.719
+  mensajes, 56 lotes, 61 s, ~500 MB de RSS pico) da un estado idéntico al batch de Spark sobre
+  `fraudTrain` + `fraudTest` en las 999 tarjetas. `make streaming-reiniciar` vuelve todo a cero.
+
 Próximos pasos (resto de la semana 4, según el plan):
-1. Job de Spark Structured Streaming con `foreachBatch` (lee de Kafka, actualiza el estado en
-   Redis), características en el momento de la solicitud en el servicio y la prueba de
-   training-serving skew de punta a punta.
+1. Características en el momento de la solicitud en el servicio (`/predecir` lee el estado de Redis
+   y usa `calcular_caracteristicas`) y la prueba de training-serving skew de punta a punta (offline
+   vs. online, pasando por Kafka, Spark, Redis y el servicio).
 
 Actualizá esta sección cada vez que se complete un hito.

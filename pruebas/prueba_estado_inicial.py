@@ -1,4 +1,3 @@
-from collections.abc import Iterator
 from pathlib import Path
 
 import pandas as pd
@@ -7,7 +6,6 @@ from feast import Project
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.functions import col
 from pyspark.sql.types import DoubleType, LongType, StringType, StructField, StructType
-from redis import Redis
 
 from fraude.caracteristicas.almacen_estado import leer_estados
 from fraude.caracteristicas.arranque_en_frio import materializar_estado_inicial
@@ -85,14 +83,6 @@ def prueba_estado_inicial_de_spark_coincide_con_aplicar_actualizar_estado(
             ultimo_id_transaccion=fila["ultimo_id_transaccion"],
         )
         _assert_equivalentes(obtenido, esperado[fila["numero_tarjeta"]])
-
-
-@pytest.fixture
-def redis_de_prueba() -> Iterator[None]:
-    cliente = Redis(host="localhost", port=6379, db=1)
-    cliente.flushdb()
-    yield
-    cliente.flushdb()
 
 
 @pytest.mark.integracion

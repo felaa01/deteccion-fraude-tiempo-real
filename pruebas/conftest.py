@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from pyspark.sql import SparkSession
+from redis import Redis
 
 
 @pytest.fixture(scope="session")
@@ -52,3 +53,12 @@ def transacciones_aleatorias() -> pd.DataFrame:
                 }
             )
     return pd.DataFrame(filas)
+
+
+@pytest.fixture
+def redis_de_prueba() -> Iterator[None]:
+    """Base 1 de Redis (la 0 es la del estado real), vaciada antes y después de la prueba."""
+    cliente = Redis(host="localhost", port=6379, db=1)
+    cliente.flushdb()
+    yield
+    cliente.flushdb()
