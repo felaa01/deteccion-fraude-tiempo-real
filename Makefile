@@ -1,4 +1,4 @@
-.PHONY: instalar lint formatear tipos pruebas verificar mlflow-arriba mlflow-abajo entrenar servicio-arriba servicio-abajo calcular-historico
+.PHONY: instalar lint formatear tipos pruebas verificar mlflow-arriba mlflow-abajo entrenar servicio-arriba servicio-abajo calcular-historico kafka-arriba kafka-abajo kafka-crear-topico
 
 instalar:
 	uv sync
@@ -36,3 +36,13 @@ servicio-arriba:
 
 servicio-abajo:
 	docker compose --profile servicio down
+
+kafka-arriba:
+	docker compose --profile tiempo-real up -d kafka
+
+kafka-abajo:
+	docker compose --profile tiempo-real down
+
+kafka-crear-topico:
+	docker compose --profile tiempo-real exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+		--create --if-not-exists --topic transacciones --partitions 3 --replication-factor 1
