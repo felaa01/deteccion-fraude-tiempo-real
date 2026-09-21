@@ -124,18 +124,48 @@ promovió a `campeon` en el registro de MLflow.
 - `GET /salud`: chequeo de vida.
 - `POST /predecir`: recibe los campos crudos de una transacción (los mismos que necesita
   `agregar_caracteristicas_basicas`, para no calcular la característica dos veces con lógica
-  distinta) y devuelve `probabilidad_fraude`, `es_fraude` (según el umbral que se eligió al
-  entrenar el campeón) y la versión del modelo que respondió.
+  distinta) más el `numero_tarjeta`, y devuelve `probabilidad_fraude`, `es_fraude` (según el umbral
+  que se eligió al entrenar el campeón), la versión del modelo que respondió y las 8
+  características históricas de la tarjeta (`caracteristicas_historicas`, con
+  `tarjeta_con_historia`).
 
 El modelo se carga una sola vez, al arrancar el proceso (`fraude.servicio.modelo_actual`); un
 campeón nuevo se toma recién en el próximo reinicio del servicio — el refresco en caliente es un
 problema de despliegue (semana 6, Kubernetes), no de esta API.
 
+**Características históricas.** El servicio lee de Redis (vía Feast, `fraude.servicio.tienda_estado`)
+el estado crudo de la tarjeta y calcula las ventanas al momento de la solicitud con
+`calcular_caracteristicas`, la misma función pura que valida la prueba de skew. Es **solo lectura**:
+el único escritor del estado es el job de Spark, así que dos llamadas seguidas por la misma tarjeta
+ven el mismo estado hasta que la transacción pase por Kafka. Por ahora el campeón **no las usa** (se
+entrenó solo con las básicas): se devuelven para validar el skew de punta a punta antes de entrenar
+un retador que las consuma.
+
+| Situación | Respuesta |
+|-----------|-----------|
+| Tarjeta sin estado en Redis | 200, tratada como nueva (`tarjeta_con_historia: false`) |
+| Solicitud anterior a la última transacción ya aplicada al estado | 409 (choca con el estado, no es un error de formato) |
+| Redis no responde | 503: sin la historia no se puede calcular; tratarla como nueva daría valores equivocados en silencio |
+
 ```bash
-make servicio-arriba   # build + docker compose --profile servicio up -d (mlflow + api)
+make servicio-arriba   # build + docker compose --profile servicio up -d (mlflow + redis + api)
 curl -X POST localhost:8000/predecir -H 'Content-Type: application/json' -d '{...}'
 make servicio-abajo
 ```
+
+Redis vive en los perfiles `tiempo-real` y `servicio` (mismo contenedor y volumen). Para tener estado
+que leer: `make arranque-en-frio` (o `make streaming-reiniciar` con Kafka arriba). El servicio arma su
+propio registro de Feast al arrancar (`apply`, solo metadatos), sin depender del `registro_feast.db`
+del host; Redis y el registro se configuran con `REDIS_CONEXION` y `REGISTRO_FEAST`.
+
+**Validación con datos reales** (contenedores reales, Redis con el estado al corte de `fraudTrain`):
+para la primera transacción de `fraudTest` de cada una de las 924 tarjetas, lo que devuelve
+`/predecir` contra el Parquet offline de Spark da **0 celdas distintas de 7.392** (8
+características), con el mismo criterio de las pruebas del repo (`rel=1e-9` para los flotantes).
+Con igualdad exacta difieren `monto_acumulado_tarjeta` y su ratio (~5e-15 relativo): es ruido de
+orden de suma en coma flotante (la ventana `rangeBetween` de Spark no suma en orden estricto), no
+un error de lógica; ni siquiera la suma secuencial en Python coincide bit a bit con el batch.
+Latencia de `/predecir` (servicio + Redis local): p50 ~6 ms, p99 ~7 ms.
 
 **MLflow con `--allowed-hosts`:** el contenedor `api` le habla a MLflow como `http://mlflow:5000`
 (el nombre del servicio en la red de Docker, no `localhost`). Las versiones recientes de MLflow
@@ -318,7 +348,8 @@ completa se hace en GitHub Codespaces.
 |---------------------------|-----------|--------|------------|
 | `entrenamiento` | `mlflow` | 1536 MB | Se estabiliza contra el límite (`docker stats` incluye caché de página, no solo memoria real). Con 512-768 MB entraba en un loop de reinicios (`RestartCount` subiendo) al loguear un modelo LightGBM real; con los 4 workers por defecto de `mlflow server` la presión era aún mayor — se bajó a `--workers 1`. |
 | `servicio` | `mlflow` | 1536 MB | Igual que en `entrenamiento`: solo hace falta para que la API cargue el campeón al arrancar. |
-| `servicio` | `api` | 1024 MB | ~292 MB en reposo (`docker stats`), con PyTorch y LightGBM cargados en memoria. Queda margen: no se ajustó a la baja para no arriesgar OOM cuando lleguen ráfagas de pedidos concurrentes. |
+| `servicio` | `api` | 1024 MB | ~370 MB tras atender ~1.000 pedidos (`docker stats`; ~292 MB en reposo antes de sumar Feast), con PyTorch, LightGBM y Feast cargados. Queda margen: no se ajustó a la baja para no arriesgar OOM cuando lleguen ráfagas de pedidos concurrentes. |
+| `servicio` | `redis` | 256 MB | El mismo contenedor que en `tiempo-real`; ~10 MB con el estado de 983 tarjetas. El perfil `servicio` completo (mlflow + redis + api) mide ~1,6 GB (`docker stats`). |
 | `tiempo-real` | `kafka` (KRaft, un nodo) | 1024 MB (heap JVM `-Xmx512m`) | ~394 MB en reposo con el tópico `transacciones` creado (`docker stats`). |
 | `tiempo-real` | `redis` (8.8, almacén online de Feast) | 256 MB (`maxmemory 192mb`, `noeviction`) | ~6 MB en reposo. Solo guarda el estado de ~1.000 tarjetas. |
 | _(sin Docker, script directo)_ | `make streaming` (Spark `local[4]`, driver 1 GB, conector de Kafka) | `spark.driver.memory=1g` | ~500 MB de RSS pico procesando `fraudTest` completo (555.719 mensajes, 56 lotes, ~44 s). En modo continuo: JVM de Spark ~560 MB + Python ~464 MB. Todo el subsistema `tiempo-real` junto (Kafka ~435 MB + Redis ~10 MB + job): ~1,5 GB, dentro del presupuesto de 3-4 GB. |

@@ -230,10 +230,25 @@ Hecho:
   `float_precision="round_trip"` para igualar el `cast` de Spark, y `make streaming-reiniciar` ahora
   vacía la base 0 de Redis.
 
+  Servicio con estado (`servicio/tienda_estado.py`, `servicio/principal.py`): `/predecir` recibe
+  `numero_tarjeta`, lee el estado de Redis vía Feast (solo lectura: el único escritor es Spark),
+  calcula las 8 características con `calcular_caracteristicas` y las devuelve junto con la
+  predicción; el campeón sigue usando solo las básicas (enfoque "A" en dos pasos: primero infra
+  + skew, después un retador entrenado con ellas). Tarjeta sin estado -> 200 como nueva; solicitud
+  anterior al estado -> 409; Redis caído -> 503. Redis quedó en los perfiles `tiempo-real` y
+  `servicio`; el servicio arma su registro de Feast con `apply` al arrancar. Validado contra
+  contenedores reales: 924 tarjetas (primera transacción de `fraudTest`), **0 celdas distintas de
+  7.392** contra el Parquet offline con `rel=1e-9`; con igualdad exacta difieren en ~5e-15 el monto
+  acumulado y su ratio (orden de suma en coma flotante; ni la suma secuencial en Python coincide
+  bit a bit con la ventana de Spark). Latencia p50 ~6 ms. `api` ~370 MB.
+
 Próximos pasos (resto de la semana 4, según el plan):
-1. Servicio: `/predecir` lee el estado de Redis y usa `calcular_caracteristicas`, y la prueba de
-   training-serving skew de punta a punta (offline vs. online, pasando por Kafka, Spark, Redis y el
-   servicio). Decidir aparte si se reentrena el modelo con las características nuevas (hoy el
-   campeón solo usa las básicas).
+1. Prueba de training-serving skew de punta a punta (offline vs. online pasando por Kafka, Spark,
+   Redis y el servicio, con la secuencia completa de transacciones de cada tarjeta, no solo la
+   primera).
+2. Entrenar un retador con las características históricas (join point-in-time de Feast) y
+   compararlo por costo contra el campeón; la promoción es manual (regla 7). Puede ir en la
+   semana 5 con Airflow.
+3. README (arquitectura) y PR de la semana 4.
 
 Actualizá esta sección cada vez que se complete un hito.

@@ -27,7 +27,8 @@ services:
     mem_limit: 1536m
     restart: unless-stopped
 
-  # Perfil "servicio": API FastAPI que sirve al campeón vigente del registro de MLflow.
+  # Perfil "servicio": API FastAPI que sirve al campeón vigente del registro de MLflow y
+  # lee de Redis el estado por tarjeta para calcular las características históricas.
   api:
     build:
       context: .
@@ -37,8 +38,10 @@ services:
       - "8000:8000"
     environment:
       MLFLOW_TRACKING_URI: http://mlflow:5000
+      REDIS_CONEXION: redis:6379
     depends_on:
       - mlflow
+      - redis
     mem_limit: 1024m
     restart: unless-stopped
 
@@ -75,9 +78,10 @@ services:
     mem_limit: 1024m
     restart: unless-stopped
 
-  # Perfil "tiempo-real": almacén online de Feast. Guarda el estado por tarjeta (unos
-  # cientos de bytes por tarjeta, ~1.000 tarjetas en este dataset), así que el límite es
-  # holgado.
+  # Perfiles "tiempo-real" y "servicio": almacén online de Feast. Guarda el estado por
+  # tarjeta (unos cientos de bytes por tarjeta, ~1.000 tarjetas en este dataset), así que el
+  # límite es holgado. Spark lo escribe (tiempo-real) y la API lo lee (servicio); comparten
+  # el mismo contenedor y volumen, por eso vive en los dos perfiles.
   #   - noeviction: si se llena, Redis rechaza escrituras con un error en vez de borrar
   #     tarjetas en silencio; perder el estado de una tarjeta sin avisar sería un skew
   #     imposible de detectar.
@@ -86,7 +90,7 @@ services:
   #     porque el usuario "redis" del contenedor no es el de WSL.
   redis:
     image: redis:8.8.2-alpine
-    profiles: ["tiempo-real"]
+    profiles: ["tiempo-real", "servicio"]
     ports:
       - "6379:6379"
     command: >
