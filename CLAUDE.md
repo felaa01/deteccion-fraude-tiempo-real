@@ -242,13 +242,21 @@ Hecho:
   acumulado y su ratio (orden de suma en coma flotante; ni la suma secuencial en Python coincide
   bit a bit con la ventana de Spark). Latencia p50 ~6 ms. `api` ~370 MB.
 
+  Prueba de skew de punta a punta (`pruebas/prueba_skew_punta_a_punta.py`, `make
+  skew-punta-a-punta`, marcada `integracion`): productor -> Kafka -> Spark Streaming -> Redis ->
+  `/predecir` contra el Parquet del batch. Trabaja por **olas** porque el servicio lee el estado
+  *anterior* a la transacción: en la ola k puntúa la transacción k de cada tarjeta, la publica y
+  espera a que Spark la aplique antes de la ola k+1. Muestra: prefijo de 10 transacciones de 30
+  tarjetas de `fraudTest` (25 con historia y 5 nuevas sin estado en `fraudTrain`): **0 celdas
+  distintas de 2.400** (`rel=1e-9`), ~35 s. Verificada con una mutación (ventana de 1 h contada como
+  2 h): falla con 125 celdas distintas. El servicio corre en proceso con modelo falso, en la base 1
+  de Redis. Las tarjetas nuevas de `fraudTest` tienen solo 6 a 14 transacciones.
+
 Próximos pasos (resto de la semana 4, según el plan):
-1. Prueba de training-serving skew de punta a punta (offline vs. online pasando por Kafka, Spark,
-   Redis y el servicio, con la secuencia completa de transacciones de cada tarjeta, no solo la
-   primera).
-2. Entrenar un retador con las características históricas (join point-in-time de Feast) y
+1. Entrenar un retador con las características históricas (join point-in-time de Feast) y
    compararlo por costo contra el campeón; la promoción es manual (regla 7). Puede ir en la
-   semana 5 con Airflow.
-3. README (arquitectura) y PR de la semana 4.
+   semana 5 con Airflow. Al reentrenar, loguear con el entorno actual (el campeón v7 se logueó con
+   pandas 3.0.5 y Feast obliga a `pandas<3`).
+2. README (arquitectura) y PR de la semana 4.
 
 Actualizá esta sección cada vez que se complete un hito.

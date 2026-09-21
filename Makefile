@@ -1,4 +1,4 @@
-.PHONY: instalar lint formatear tipos pruebas verificar mlflow-arriba mlflow-abajo entrenar servicio-arriba servicio-abajo calcular-historico tiempo-real-arriba tiempo-real-abajo kafka-crear-topico productor arranque-en-frio streaming kafka-reiniciar-topico streaming-reiniciar
+.PHONY: instalar lint formatear tipos pruebas verificar mlflow-arriba mlflow-abajo entrenar servicio-arriba servicio-abajo calcular-historico tiempo-real-arriba tiempo-real-abajo kafka-crear-topico productor arranque-en-frio streaming kafka-reiniciar-topico streaming-reiniciar skew-punta-a-punta
 
 instalar:
 	uv sync
@@ -77,3 +77,10 @@ streaming-reiniciar: kafka-reiniciar-topico
 	rm -rf datos_features/checkpoint_streaming
 	docker compose --profile tiempo-real exec redis redis-cli -n 0 flushdb
 	$(MAKE) arranque-en-frio
+
+# Training-serving skew de punta a punta (regla 3): productor -> Kafka -> Spark -> Redis -> servicio
+# contra el batch offline, con datos reales de fraudTest (~35 s). Necesita Kafka y Redis arriba
+# (make tiempo-real-arriba) y los Parquet de make calcular-historico y make arranque-en-frio. Usa
+# la base 1 de Redis, sin tocar el estado real de la base 0.
+skew-punta-a-punta:
+	uv run pytest -m integracion pruebas/prueba_skew_punta_a_punta.py --no-cov

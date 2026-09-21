@@ -315,6 +315,30 @@ día, pasaba desde antes: **no detectó el problema que la corrida real sí enco
   bien el último decimal (`43.274585` se leía como `43.274584999999995`), lo que hacía distintas 215
   tarjetas en un `==` exacto contra Spark. `float_precision="round_trip"` da el mismo `double` que el
   `cast` de Spark.
+
+**Prueba de skew de punta a punta** (`make skew-punta-a-punta`, `pruebas/prueba_skew_punta_a_punta.py`).
+La anterior compara funciones puras en un solo proceso; esta pasa por el camino real: productor →
+Kafka → job de Spark Structured Streaming → Redis → `/predecir`, contra el Parquet del batch, con
+transacciones reales de `fraudTest`.
+
+- **Cómo:** el servicio lee el estado *anterior* a la transacción que puntúa, así que la prueba
+  trabaja por **olas**. En la ola *k* puntúa la transacción *k* de cada tarjeta, después la publica
+  en Kafka y espera a que Spark la aplique en Redis, y recién entonces pasa a la ola *k+1*. La
+  muestra es el prefijo de la secuencia de cada tarjeta (las primeras 10 transacciones de
+  `fraudTest`), de modo que el estado previo es exactamente el que vio el batch.
+- **Muestra:** 30 tarjetas (25 con historia en `fraudTrain`, las de transacciones más concentradas
+  en el tiempo para que las ventanas de 10 min, 1 h y 24 h tomen valores distintos de cero, y 5
+  **nuevas** cuyo estado lo construye el streaming desde cero), 300 transacciones × 8
+  características = **2.400 celdas: 0 distintas** (`rel=1e-9`). ~35 s en total.
+- **La prueba detecta skew (mutación):** con la ventana de 1 h contada como 2 h a propósito en
+  `calcular_caracteristicas`, la misma prueba falla con 125 celdas distintas. Un test que pasa a la
+  primera y no se prueba contra un error inducido no demuestra nada.
+- **Alcance:** el servicio corre en proceso (FastAPI y tienda de Feast reales) con un modelo falso,
+  porque se mide el skew de las características y no el modelo; así entra en el presupuesto del
+  perfil `tiempo-real` sin levantar MLflow. Usa la base 1 de Redis y no toca el estado real de la
+  base 0. La cadena con los contenedores del servicio ya se validó con las 924 tarjetas de arriba.
+- **Tarjetas nuevas:** las 16 tarjetas de `fraudTest` que no están en `fraudTrain` son de poca
+  actividad (6 a 14 transacciones), por eso la muestra usa 10 por tarjeta y no más.
 - **Un bug del reinicio:** `make streaming-reiniciar` no borraba las tarjetas que solo existen en
   `fraudTest`, que conservaban el estado de la corrida anterior (con otro esquema). Ahora vacía la
   base 0 de Redis antes del arranque en frío.
