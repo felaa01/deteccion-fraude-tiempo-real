@@ -42,6 +42,10 @@ def cargar_transacciones(ruta: Path) -> pd.DataFrame:
     df = pd.read_csv(
         ruta,
         index_col=0,
+        # El parser rápido por defecto de pandas no siempre redondea bien el último decimal
+        # (43.274585 puede leerse como 43.274584999999995). `round_trip` da el mismo double
+        # que el `cast` de Spark, así el estado batch y el del streaming son idénticos bit a bit.
+        float_precision="round_trip",
         parse_dates=["trans_date_trans_time", "dob"],
     )
     return df.rename(columns=COLUMNAS_EN_ESPANOL)

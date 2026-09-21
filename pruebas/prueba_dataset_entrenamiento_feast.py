@@ -25,6 +25,8 @@ HISTORICO = pd.DataFrame(
         "monto_acumulado_tarjeta": [float("nan"), 10.0],
         "ratio_monto_promedio_tarjeta": [float("nan"), 2.0],
         "categoria_nueva_para_tarjeta": [True, False],
+        "distancia_transaccion_anterior_km": [float("nan"), 111.19],
+        "velocidad_implicita_kmh": [float("nan"), 1334.3],
     }
 )
 

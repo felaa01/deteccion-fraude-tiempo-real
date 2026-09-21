@@ -178,9 +178,85 @@ Hecho:
   `to_timestamp` seguido de `toPandas()` se cancela solo. Prueba de regresión agregada
   (`pruebas/prueba_calcular_historico.py`).
 
-Próximos pasos (semana 4, según el plan):
-1. Kafka en modo KRaft, Spark Structured Streaming, push a Redis (almacén online de Feast),
-   características en el momento de la solicitud en el servicio, y la prueba de
-   training-serving skew (offline vs. online).
+- Semana 4, en curso (rama `semana-4/kafka-streaming`): broker de Kafka 4.3.1 en KRaft (perfil
+  `tiempo-real`, `make tiempo-real-arriba`, tópico `transacciones` con 3 particiones, ~394 MB) y productor
+  (`src/fraude/productor/`, `make productor`) con `confluent-kafka`: reproduce `fraudTest` ordenado por
+  fecha (desempate por `id_transaccion`), clave = `numero_tarjeta`, ritmo acelerado agendado contra el
+  inicio. El mensaje excluye `es_fraude` y datos personales. `unix_time` del dataset no es confiable:
+  está ~7 años atrás de la fecha (2013 vs 2020) y en `fraudTrain` el desfase no es constante (2557
+  días, 2556 entre el 2019-02-28 y el 2020-03-01) y el archivo está ordenado por `unix_time` pero no
+  por fecha: el event time y el orden son siempre `fecha_hora_transaccion`. Validado contra
+  el broker real: 0 tarjetas en más de una partición, 0 transacciones fuera de orden.
+
+  Estado por tarjeta (`caracteristicas/estado_tarjeta.py`): funciones puras `actualizar_estado`
+  (streaming, idempotente) y `calcular_caracteristicas` (momento de la solicitud), sin Spark/Redis/Feast.
+  Redis guarda el estado crudo (marcas y montos de las últimas 24 h, acumulado, categorías), no los
+  conteos ya calculados, porque estos dependen de la hora de la solicitud. Decisiones: el estado vive
+  solo en Redis (Spark lo lee y lo actualiza en `foreachBatch`), Feast como capa de acceso y el arranque
+  en frío materializa el estado al final de `fraudTrain`. Prueba de skew unitaria contra el batch de
+  Spark (600 transacciones con empates de segundo y huecos de más de 24 h): pasa.
+
+  Redis 8.8 en el perfil `tiempo-real` (256 MB, `noeviction`, AOF) como almacén online de Feast:
+  vista `estado_tarjeta` con `PushSource` (`caracteristicas/definiciones.py`), `crear_tienda_online`
+  (`tienda.py`) y `escribir_estados`/`leer_estados` (`almacen_estado.py`). Hallazgo: el almacén Redis
+  de Feast descarta writes con timestamp menor o igual al guardado, lo que perdería la segunda
+  transacción de una tarjeta en el mismo segundo; se usa `skip_dedup=True` (verificado con una
+  prueba que falla si se apaga). Las pruebas de integración usan la base 1 de Redis.
+
+  Arranque en frío (`make arranque-en-frio`): Spark calcula el estado por tarjeta al corte de
+  `fraudTrain` (`lotes/estado_inicial.py`, agregaciones propias, segunda implementación
+  independiente de `actualizar_estado`) a Parquet y Feast lo materializa en Redis
+  (`caracteristicas/arranque_en_frio.py`). Validado con datos reales: 983 de 983 tarjetas idénticas
+  al estado secuencial sobre 1.296.675 transacciones (~32 s, ~436 MB de RSS). Los helpers de Spark
+  compartidos quedaron en `lotes/comun.py`. `categorias_vistas` es siempre una tupla ordenada
+  (forma canónica).
+
+  Job de Spark Structured Streaming (`tiempo_real/streaming_estado.py`, `make streaming`): lee el
+  tópico y, en `foreachBatch`, lee el estado de las tarjetas del lote desde Redis, aplica las
+  transacciones en orden con `actualizar_estado` y escribe (`tiempo_real/lote_estado.py`). Al menos
+  una vez pero idempotente. La fecha se parsea como UTC explícito (`Z`), sin depender de la tz de la
+  sesión. Validado con datos reales: arranque en frío + `fraudTest` completo por Kafka (555.719
+  mensajes, 56 lotes, 61 s, ~500 MB de RSS pico) da un estado idéntico al batch de Spark sobre
+  `fraudTrain` + `fraudTest` en las 999 tarjetas. `make streaming-reiniciar` vuelve todo a cero.
+
+  Distancia y velocidad respecto de la transacción anterior (`distancia_transaccion_anterior_km`,
+  `velocidad_implicita_kmh`): el estado guarda la ubicación del comercio de la última transacción;
+  "anterior" es la previa en orden `(fecha, id)` (como un `lag`), velocidad nula si el intervalo es 0
+  s. Implementada offline (Spark), online (`calcular_caracteristicas`) y en Feast, con
+  `caracteristicas/geografia.py`. **Prueba de skew con datos reales: 0 celdas distintas de
+  14.819.152** (8 características, 1.852.394 transacciones). Encontró un bug de la semana 3: el
+  batch ordenaba y ventaneaba por `unix_time`, que no equivale a la fecha en `fraudTrain`; ahora usa
+  `marca_tiempo` derivada de la fecha (con prueba de regresión). `read_csv` con
+  `float_precision="round_trip"` para igualar el `cast` de Spark, y `make streaming-reiniciar` ahora
+  vacía la base 0 de Redis.
+
+  Servicio con estado (`servicio/tienda_estado.py`, `servicio/principal.py`): `/predecir` recibe
+  `numero_tarjeta`, lee el estado de Redis vía Feast (solo lectura: el único escritor es Spark),
+  calcula las 8 características con `calcular_caracteristicas` y las devuelve junto con la
+  predicción; el campeón sigue usando solo las básicas (enfoque "A" en dos pasos: primero infra
+  + skew, después un retador entrenado con ellas). Tarjeta sin estado -> 200 como nueva; solicitud
+  anterior al estado -> 409; Redis caído -> 503. Redis quedó en los perfiles `tiempo-real` y
+  `servicio`; el servicio arma su registro de Feast con `apply` al arrancar. Validado contra
+  contenedores reales: 924 tarjetas (primera transacción de `fraudTest`), **0 celdas distintas de
+  7.392** contra el Parquet offline con `rel=1e-9`; con igualdad exacta difieren en ~5e-15 el monto
+  acumulado y su ratio (orden de suma en coma flotante; ni la suma secuencial en Python coincide
+  bit a bit con la ventana de Spark). Latencia p50 ~6 ms. `api` ~370 MB.
+
+  Prueba de skew de punta a punta (`pruebas/prueba_skew_punta_a_punta.py`, `make
+  skew-punta-a-punta`, marcada `integracion`): productor -> Kafka -> Spark Streaming -> Redis ->
+  `/predecir` contra el Parquet del batch. Trabaja por **olas** porque el servicio lee el estado
+  *anterior* a la transacción: en la ola k puntúa la transacción k de cada tarjeta, la publica y
+  espera a que Spark la aplique antes de la ola k+1. Muestra: prefijo de 10 transacciones de 30
+  tarjetas de `fraudTest` (25 con historia y 5 nuevas sin estado en `fraudTrain`): **0 celdas
+  distintas de 2.400** (`rel=1e-9`), ~35 s. Verificada con una mutación (ventana de 1 h contada como
+  2 h): falla con 125 celdas distintas. El servicio corre en proceso con modelo falso, en la base 1
+  de Redis. Las tarjetas nuevas de `fraudTest` tienen solo 6 a 14 transacciones.
+
+Próximos pasos (resto de la semana 4, según el plan):
+1. Entrenar un retador con las características históricas (join point-in-time de Feast) y
+   compararlo por costo contra el campeón; la promoción es manual (regla 7). Puede ir en la
+   semana 5 con Airflow. Al reentrenar, loguear con el entorno actual (el campeón v7 se logueó con
+   pandas 3.0.5 y Feast obliga a `pandas<3`).
+2. README (arquitectura) y PR de la semana 4.
 
 Actualizá esta sección cada vez que se complete un hito.

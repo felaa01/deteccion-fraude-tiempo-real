@@ -12,11 +12,8 @@ atrás, transacciones anteriores de su propia tarjeta (ver
 import logging
 from pathlib import Path
 
-from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql import functions as F
-
-from fraude.entrenamiento.carga import COLUMNAS_EN_ESPANOL
 from fraude.lotes.caracteristicas_historicas import agregar_caracteristicas_historicas
+from fraude.lotes.comun import cargar_transacciones, crear_sesion_spark
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -37,55 +34,15 @@ COLUMNAS_DE_SALIDA = [
     "monto_acumulado_tarjeta",
     "ratio_monto_promedio_tarjeta",
     "categoria_nueva_para_tarjeta",
+    "distancia_transaccion_anterior_km",
+    "velocidad_implicita_kmh",
 ]
 
 
-def _crear_sesion_spark() -> SparkSession:
-    # `local[4]`, no `local[*]`: máquina de 8 GB (WSL limitado a 5 GB, sin GPU), y este
-    # job corre junto con lo demás que uno tenga abierto -- no hace falta acaparar todos
-    # los núcleos para un dataset de ~1,8 millones de filas.
-    return (
-        SparkSession.builder.appName("fraude-caracteristicas-historicas")
-        .master("local[4]")
-        .config("spark.driver.memory", "2g")
-        .config("spark.sql.shuffle.partitions", "8")
-        .getOrCreate()
-    )
-
-
-def _cargar_transacciones(spark: SparkSession, rutas_csv: list[Path]) -> DataFrame:
-    """Lee los CSV crudos, los renombra al español y castea las columnas que se usan.
-
-    Se lee con `inferSchema=False` (todo como string) y se castea a mano en vez de
-    confiar en la inferencia de tipos de Spark: es explícito y evita una pasada extra
-    de Spark sobre todo el archivo solo para adivinar tipos.
-    """
-    # `to_timestamp` interpreta el string con la zona horaria de sesión (que por
-    # default toma la del sistema). Sin fijarla a UTC, esta máquina (UTC-3) correría
-    # todos los timestamps 3 horas y rompería en silencio -- sin ningún error -- el
-    # join point-in-time contra entity_df armados en pandas, que toman el string tal
-    # cual, sin huso horario.
-    spark.conf.set("spark.sql.session.timeZone", "UTC")
-    crudo = spark.read.csv([str(ruta) for ruta in rutas_csv], header=True, inferSchema=False)
-    for original, espanol in COLUMNAS_EN_ESPANOL.items():
-        crudo = crudo.withColumnRenamed(original, espanol)
-
-    return crudo.select(
-        F.col("numero_tarjeta").cast("long").alias("numero_tarjeta"),
-        "categoria",
-        "id_transaccion",
-        F.col("monto").cast("double").alias("monto"),
-        F.col("marca_tiempo_unix").cast("long").alias("marca_tiempo_unix"),
-        F.to_timestamp("fecha_hora_transaccion", "yyyy-MM-dd HH:mm:ss").alias(
-            "fecha_hora_transaccion"
-        ),
-    )
-
-
 def main() -> None:
-    spark = _crear_sesion_spark()
+    spark = crear_sesion_spark("fraude-caracteristicas-historicas")
     try:
-        transacciones = _cargar_transacciones(
+        transacciones = cargar_transacciones(
             spark, [RUTA_DATOS / "fraudTrain.csv", RUTA_DATOS / "fraudTest.csv"]
         )
         con_caracteristicas = agregar_caracteristicas_historicas(transacciones)

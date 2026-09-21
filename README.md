@@ -124,24 +124,224 @@ promovió a `campeon` en el registro de MLflow.
 - `GET /salud`: chequeo de vida.
 - `POST /predecir`: recibe los campos crudos de una transacción (los mismos que necesita
   `agregar_caracteristicas_basicas`, para no calcular la característica dos veces con lógica
-  distinta) y devuelve `probabilidad_fraude`, `es_fraude` (según el umbral que se eligió al
-  entrenar el campeón) y la versión del modelo que respondió.
+  distinta) más el `numero_tarjeta`, y devuelve `probabilidad_fraude`, `es_fraude` (según el umbral
+  que se eligió al entrenar el campeón), la versión del modelo que respondió y las 8
+  características históricas de la tarjeta (`caracteristicas_historicas`, con
+  `tarjeta_con_historia`).
 
 El modelo se carga una sola vez, al arrancar el proceso (`fraude.servicio.modelo_actual`); un
 campeón nuevo se toma recién en el próximo reinicio del servicio — el refresco en caliente es un
 problema de despliegue (semana 6, Kubernetes), no de esta API.
 
+**Características históricas.** El servicio lee de Redis (vía Feast, `fraude.servicio.tienda_estado`)
+el estado crudo de la tarjeta y calcula las ventanas al momento de la solicitud con
+`calcular_caracteristicas`, la misma función pura que valida la prueba de skew. Es **solo lectura**:
+el único escritor del estado es el job de Spark, así que dos llamadas seguidas por la misma tarjeta
+ven el mismo estado hasta que la transacción pase por Kafka. Por ahora el campeón **no las usa** (se
+entrenó solo con las básicas): se devuelven para validar el skew de punta a punta antes de entrenar
+un retador que las consuma.
+
+| Situación | Respuesta |
+|-----------|-----------|
+| Tarjeta sin estado en Redis | 200, tratada como nueva (`tarjeta_con_historia: false`) |
+| Solicitud anterior a la última transacción ya aplicada al estado | 409 (choca con el estado, no es un error de formato) |
+| Redis no responde | 503: sin la historia no se puede calcular; tratarla como nueva daría valores equivocados en silencio |
+
 ```bash
-make servicio-arriba   # build + docker compose --profile servicio up -d (mlflow + api)
+make servicio-arriba   # build + docker compose --profile servicio up -d (mlflow + redis + api)
 curl -X POST localhost:8000/predecir -H 'Content-Type: application/json' -d '{...}'
 make servicio-abajo
 ```
+
+Redis vive en los perfiles `tiempo-real` y `servicio` (mismo contenedor y volumen). Para tener estado
+que leer: `make arranque-en-frio` (o `make streaming-reiniciar` con Kafka arriba). El servicio arma su
+propio registro de Feast al arrancar (`apply`, solo metadatos), sin depender del `registro_feast.db`
+del host; Redis y el registro se configuran con `REDIS_CONEXION` y `REGISTRO_FEAST`.
+
+**Validación con datos reales** (contenedores reales, Redis con el estado al corte de `fraudTrain`):
+para la primera transacción de `fraudTest` de cada una de las 924 tarjetas, lo que devuelve
+`/predecir` contra el Parquet offline de Spark da **0 celdas distintas de 7.392** (8
+características), con el mismo criterio de las pruebas del repo (`rel=1e-9` para los flotantes).
+Con igualdad exacta difieren `monto_acumulado_tarjeta` y su ratio (~5e-15 relativo): es ruido de
+orden de suma en coma flotante (la ventana `rangeBetween` de Spark no suma en orden estricto), no
+un error de lógica; ni siquiera la suma secuencial en Python coincide bit a bit con el batch.
+Latencia de `/predecir` (servicio + Redis local): p50 ~6 ms, p99 ~7 ms.
 
 **MLflow con `--allowed-hosts`:** el contenedor `api` le habla a MLflow como `http://mlflow:5000`
 (el nombre del servicio en la red de Docker, no `localhost`). Las versiones recientes de MLflow
 rechazan por defecto cualquier header `Host` que no sea `localhost` o una IP privada, como
 protección contra ataques de DNS rebinding — hubo que agregar `--allowed-hosts localhost,mlflow:5000`
 al comando del servidor para permitir explícitamente ese nombre.
+
+## Flujo en tiempo real (Kafka)
+
+Perfil `tiempo-real` de Docker Compose (Kafka + Redis). Se levanta de a un subsistema por vez (no
+junto con MLflow ni con el servicio).
+
+```bash
+make tiempo-real-arriba   # Kafka en modo KRaft (un nodo) + Redis, el almacén online de Feast
+make kafka-crear-topico   # tópico `transacciones`, 3 particiones
+make productor ARGS="--limite 2000"   # reproduce fraudTest acelerado (x3600 por defecto)
+make tiempo-real-abajo
+```
+
+- **Clave del mensaje = `numero_tarjeta`.** Kafka solo garantiza orden dentro de una partición, y la
+  partición sale del hash de la clave: todas las transacciones de una tarjeta se consumen en el
+  orden en que ocurrieron, que es lo que necesitan las ventanas por tarjeta.
+- **El mensaje no lleva `es_fraude`** (las etiquetas llegan con demora, regla 6) ni datos personales
+  que ninguna característica use.
+- **El tiempo del evento es `fecha_hora_transaccion`.** La columna `unix_time` del dataset no se
+  usa: está unos 7 años atrás (2013 contra 2020) y en `fraudTrain` el desfase **no es constante**
+  (2557 días, y 2556 entre el 2019-02-28 y el 2020-03-01, porque el generador sumó 7 años de
+  calendario y perdió el 29 de febrero de 2012). El archivo está ordenado por `unix_time` y no por
+  fecha (1.716 filas con orden distinto), así que ordenar o ventanear con una columna o con la otra
+  da historias distintas. `fraudTest` es consistente en ambas.
+- **Ritmo acelerado** (`--aceleracion`, segundos simulados por segundo real; 0 = sin esperas). Cada
+  mensaje se agenda contra el inicio de la reproducción, no como "esperar la diferencia con el
+  anterior", para que el error de cada `sleep` no se acumule. Verificado: 41.768 s simulados a x3600
+  tardaron 11,6 s reales.
+- Publicar dos veces sin recrear el tópico duplica los mensajes.
+
+### Estado por tarjeta en Redis (Feast online)
+
+Redis no guarda "cuántas transacciones tuvo la tarjeta en las últimas 24 h" ya calculado: ese
+número depende de la hora de la transacción que se autoriza, que todavía no existe cuando se
+actualiza el almacén. Guarda el **estado crudo** de cada tarjeta (`EstadoTarjeta`: marcas y
+montos de las últimas 24 h, acumulado histórico, categorías vistas y la ubicación del comercio de
+la última transacción) y el servicio calcula las ventanas, la distancia y la velocidad al recibir
+el pedido. Es la vista `estado_tarjeta` de Feast, con un `PushSource` para el
+streaming.
+
+- **`skip_dedup=True` en el almacén Redis de Feast.** Por defecto Feast descarta un write con
+  timestamp *menor o igual* al guardado; dos transacciones de una tarjeta en el mismo segundo
+  harían que se perdiera la segunda. La protección contra valores viejos ya la da
+  `actualizar_estado` (idempotente por `(marca, id)`) y hay un único escritor. Hay una prueba de
+  regresión que falla si se apaga.
+- **`noeviction` + AOF.** Si Redis se llena, rechaza escrituras en vez de borrar tarjetas en
+  silencio, y el estado sobrevive a un reinicio.
+- **Sin `ttl`** en la vista: un `ttl` haría que Feast devolviera nulos para tarjetas inactivas y
+  el servicio las trataría como nuevas.
+
+### Arranque en frío
+
+Antes de reproducir `fraudTest`, el almacén online tiene que arrancar con la historia de cada
+tarjeta al corte de `fraudTrain`; si no, los contadores no coincidirían con los offline (que se
+calcularon sobre todo el histórico). Es el patrón real de producción: el lote aporta la historia y
+el streaming solo aplica lo nuevo.
+
+```bash
+make tiempo-real-arriba
+make arranque-en-frio   # Spark calcula el estado a Parquet y Feast lo materializa en Redis
+```
+
+- **Segunda implementación, independiente.** El lote (`lotes/estado_inicial.py`) calcula el estado
+  con agregaciones de Spark; el streaming lo va a calcular fila a fila con `actualizar_estado`. Que
+  las dos coincidan es evidencia de que no hay un bug compartido.
+- **Validado con los datos reales:** las 983 tarjetas de `fraudTrain` (1.296.675 transacciones)
+  quedaron en Redis idénticas al estado que da aplicar `actualizar_estado` fila a fila (0 faltantes,
+  0 distintas; los montos se comparan con tolerancia relativa de 1e-9 porque Spark y Python suman en
+  distinto orden). Acotar el estado a 24 h lo mantiene chico: máximo 15 transacciones recientes por
+  tarjeta, 4 en promedio.
+- `categorias_vistas` se guarda ordenada alfabéticamente: es la forma canónica, para poder comparar
+  por igualdad sin depender del orden de aparición.
+
+### Streaming: Kafka -> Spark -> Redis
+
+Job de Spark Structured Streaming (`tiempo_real/streaming_estado.py`) que lee el tópico y mantiene
+el estado por tarjeta en Redis. Corre en el host con `uv`; el broker y Redis, en Docker.
+
+```bash
+make tiempo-real-arriba && make kafka-crear-topico && make arranque-en-frio
+make productor ARGS="--aceleracion 0"        # publica fraudTest
+make streaming ARGS="--hasta-agotar"         # procesa lo que hay y termina (sin el flag, queda escuchando)
+make streaming-reiniciar                     # vuelve a cero: tópico, checkpoint y estado de Redis
+```
+
+- **El estado vive solo en Redis; Spark lo lee y lo actualiza en `foreachBatch`.** Por cada
+  micro-lote: se leen los estados de las tarjetas involucradas, se aplican sus transacciones en orden
+  y se escribe el resultado (`tiempo_real/lote_estado.py`, separado de Spark para poder probarlo solo).
+  Se descartó el operador con estado de Spark (`transformWithState`): habría dos copias del estado que
+  pueden divergir, más el checkpoint de estado, en una máquina de 5 GB.
+- **Al menos una vez, pero idempotente.** Structured Streaming puede repetir un lote tras una falla;
+  `actualizar_estado` ignora lo ya aplicado (compara `(marca, id)`), y una tarjeta cuyo lote entero ya
+  estaba aplicado ni se vuelve a escribir. Una prueba de integración relee el tópico completo con un
+  checkpoint nuevo y verifica que el estado no cambie.
+- **La fecha se interpreta como UTC de forma explícita** (se le agrega `Z` antes de parsear), sin
+  depender de la zona horaria de la sesión de Spark: es el bug que corrompió los timestamps en la
+  semana 3, con una prueba de regresión que cambia la zona de la sesión.
+- Un mensaje que no es JSON válido no rompe el lote: se descarta, se cuenta y se registra un aviso.
+- `maxOffsetsPerTrigger=10000` acota el tamaño de cada lote (y la memoria del driver) cuando hay
+  mucho atrasado en el tópico. El conector (`spark-sql-kafka-0-10_2.13:4.2.0`) coincide con la
+  versión de Spark y la de Scala del PySpark instalado; Spark lo baja de Maven Central.
+
+**Validación con los datos reales.** Arranque en frío desde `fraudTrain` + las 555.719 transacciones
+de `fraudTest` por Kafka (56 micro-lotes, ~44 s con `--aceleracion 0`): el estado final en Redis es
+**idéntico** al que calcula el batch de Spark sobre `fraudTrain` + `fraudTest` juntos, para las 999
+tarjetas (0 faltantes, 0 distintas). 16 de ellas solo aparecen en `fraudTest`: el streaming las crea
+desde cero y también coinciden.
+
+### Distancia y velocidad respecto de la transacción anterior
+
+Son las dos características "en el momento de la solicitud" del plan (una tarjeta usada en
+Montevideo y 20 minutos después en Madrid): no pueden esperar al micro-lote, así que las calcula el
+servicio a partir de la última ubicación guardada en Redis.
+
+- `distancia_transaccion_anterior_km`: Haversine entre la ubicación del comercio de la
+  transacción anterior y la actual. `velocidad_implicita_kmh`: esa distancia sobre el intervalo.
+- **"Anterior" es la previa de la tarjeta en el orden `(fecha, id)`** (un `lag`), incluso si es del
+  mismo segundo. Así el estado solo guarda la última ubicación. Con un intervalo de 0 s la velocidad
+  es nula (no se puede dividir por cero) y la distancia sí se calcula. Es distinto de las ventanas
+  de tiempo, que sí son estrictamente anteriores; está documentado en `estado_tarjeta.py`.
+- Tres implementaciones de la misma fórmula (pandas, Spark y Python puro) sobre el mismo radio
+  (`caracteristicas/geografia.py`); la prueba de skew las compara.
+- **Propiedad del dataset sintético:** la mediana de distancia entre transacciones consecutivas
+  es ~100 km sin importar cuánto tiempo pasó, y la velocidad tiene una cola larguísima (p99 ~2.070
+  km/h, máximo ~780.000 km/h): el generador ubica los comercios cerca del domicilio sin modelar
+  viajes. Probablemente aporte poca señal y, si se usa en una red neuronal, haga falta transformarla.
+
+**Prueba de training-serving skew con datos reales.** Las 8 características históricas del Parquet
+offline (Spark) contra las que produce la ruta online (`actualizar_estado` +
+`calcular_caracteristicas`) sobre las **1.852.394 transacciones** de `fraudTrain` + `fraudTest`: **0
+celdas distintas de 14.819.152** (tolerancia relativa de 1e-9, y los nulos coinciden en las mismas
+posiciones). La misma prueba, sobre datos sintéticos con empates de segundo y huecos de más de un
+día, pasaba desde antes: **no detectó el problema que la corrida real sí encontró.**
+
+- **Qué encontró:** al principio daba 12.819 celdas distintas (0,09%). La causa era que el batch
+  ordenaba y ventaneaba por `unix_time` mientras que el streaming y el servicio ven la fecha, y
+  ambas columnas no son equivalentes (ver arriba). El batch ahora usa `marca_tiempo`, derivada de
+  `fecha_hora_transaccion` en UTC, con una prueba de regresión que arma dos filas cuyo orden por
+  `unix_time` contradice el orden por fecha.
+- **Otro detalle, benigno:** `pandas.read_csv` con el parser rápido por defecto no siempre redondea
+  bien el último decimal (`43.274585` se leía como `43.274584999999995`), lo que hacía distintas 215
+  tarjetas en un `==` exacto contra Spark. `float_precision="round_trip"` da el mismo `double` que el
+  `cast` de Spark.
+
+**Prueba de skew de punta a punta** (`make skew-punta-a-punta`, `pruebas/prueba_skew_punta_a_punta.py`).
+La anterior compara funciones puras en un solo proceso; esta pasa por el camino real: productor →
+Kafka → job de Spark Structured Streaming → Redis → `/predecir`, contra el Parquet del batch, con
+transacciones reales de `fraudTest`.
+
+- **Cómo:** el servicio lee el estado *anterior* a la transacción que puntúa, así que la prueba
+  trabaja por **olas**. En la ola *k* puntúa la transacción *k* de cada tarjeta, después la publica
+  en Kafka y espera a que Spark la aplique en Redis, y recién entonces pasa a la ola *k+1*. La
+  muestra es el prefijo de la secuencia de cada tarjeta (las primeras 10 transacciones de
+  `fraudTest`), de modo que el estado previo es exactamente el que vio el batch.
+- **Muestra:** 30 tarjetas (25 con historia en `fraudTrain`, las de transacciones más concentradas
+  en el tiempo para que las ventanas de 10 min, 1 h y 24 h tomen valores distintos de cero, y 5
+  **nuevas** cuyo estado lo construye el streaming desde cero), 300 transacciones × 8
+  características = **2.400 celdas: 0 distintas** (`rel=1e-9`). ~35 s en total.
+- **La prueba detecta skew (mutación):** con la ventana de 1 h contada como 2 h a propósito en
+  `calcular_caracteristicas`, la misma prueba falla con 125 celdas distintas. Un test que pasa a la
+  primera y no se prueba contra un error inducido no demuestra nada.
+- **Alcance:** el servicio corre en proceso (FastAPI y tienda de Feast reales) con un modelo falso,
+  porque se mide el skew de las características y no el modelo; así entra en el presupuesto del
+  perfil `tiempo-real` sin levantar MLflow. Usa la base 1 de Redis y no toca el estado real de la
+  base 0. La cadena con los contenedores del servicio ya se validó con las 924 tarjetas de arriba.
+- **Tarjetas nuevas:** las 16 tarjetas de `fraudTest` que no están en `fraudTrain` son de poca
+  actividad (6 a 14 transacciones), por eso la muestra usa 10 por tarjeta y no más.
+- **Un bug del reinicio:** `make streaming-reiniciar` no borraba las tarjetas que solo existen en
+  `fraudTest`, que conservaban el estado de la corrida anterior (con otro esquema). Ahora vacía la
+  base 0 de Redis antes del arranque en frío.
 
 ## Cómo ejecutarlo en local
 
@@ -172,5 +372,10 @@ completa se hace en GitHub Codespaces.
 |---------------------------|-----------|--------|------------|
 | `entrenamiento` | `mlflow` | 1536 MB | Se estabiliza contra el límite (`docker stats` incluye caché de página, no solo memoria real). Con 512-768 MB entraba en un loop de reinicios (`RestartCount` subiendo) al loguear un modelo LightGBM real; con los 4 workers por defecto de `mlflow server` la presión era aún mayor — se bajó a `--workers 1`. |
 | `servicio` | `mlflow` | 1536 MB | Igual que en `entrenamiento`: solo hace falta para que la API cargue el campeón al arrancar. |
-| `servicio` | `api` | 1024 MB | ~292 MB en reposo (`docker stats`), con PyTorch y LightGBM cargados en memoria. Queda margen: no se ajustó a la baja para no arriesgar OOM cuando lleguen ráfagas de pedidos concurrentes. |
+| `servicio` | `api` | 1024 MB | ~370 MB tras atender ~1.000 pedidos (`docker stats`; ~292 MB en reposo antes de sumar Feast), con PyTorch, LightGBM y Feast cargados. Queda margen: no se ajustó a la baja para no arriesgar OOM cuando lleguen ráfagas de pedidos concurrentes. |
+| `servicio` | `redis` | 256 MB | El mismo contenedor que en `tiempo-real`; ~10 MB con el estado de 983 tarjetas. El perfil `servicio` completo (mlflow + redis + api) mide ~1,6 GB (`docker stats`). |
+| `tiempo-real` | `kafka` (KRaft, un nodo) | 1024 MB (heap JVM `-Xmx512m`) | ~394 MB en reposo con el tópico `transacciones` creado (`docker stats`). |
+| `tiempo-real` | `redis` (8.8, almacén online de Feast) | 256 MB (`maxmemory 192mb`, `noeviction`) | ~6 MB en reposo. Solo guarda el estado de ~1.000 tarjetas. |
+| _(sin Docker, script directo)_ | `make streaming` (Spark `local[4]`, driver 1 GB, conector de Kafka) | `spark.driver.memory=1g` | ~500 MB de RSS pico procesando `fraudTest` completo (555.719 mensajes, 56 lotes, ~44 s). En modo continuo: JVM de Spark ~560 MB + Python ~464 MB. Todo el subsistema `tiempo-real` junto (Kafka ~435 MB + Redis ~10 MB + job): ~1,5 GB, dentro del presupuesto de 3-4 GB. |
+| _(sin Docker, script directo)_ | `make arranque-en-frio` (Spark `local[4]` + `materialize`) | `spark.driver.memory=2g` | ~436 MB de RSS pico (`/usr/bin/time -v`), ~32 s sobre 1.296.675 filas de `fraudTrain` (Spark + materialización a Redis). |
 | _(sin Docker, script directo)_ | `make calcular-historico` (JVM de Spark, `local[4]`) | `spark.driver.memory=2g` | ~415 MB de RSS medidos a mitad de corrida (`ps`), lejos del límite de 2 GB. Corre en ~16-20 s sobre 1.852.394 filas. `local[4]`, no `local[*]`: no hace falta acaparar los 12 núcleos de la máquina para un dataset de este tamaño. |
