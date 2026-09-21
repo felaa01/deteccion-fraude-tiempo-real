@@ -7,9 +7,10 @@ autorizar una transacción. Por eso el mensaje **no** incluye:
   viajara en el mensaje, el streaming podría usarla sin querer.
 - Datos personales que ninguna característica necesita (nombre, apellido, calle, ocupación,
   etc.).
-- `marca_tiempo_unix`: en este dataset está desfasada exactamente 7 años respecto de
-  `fecha_hora_transaccion` (2013 contra 2020). El tiempo del evento es siempre
-  `fecha_hora_transaccion`, la misma columna que usa el almacén offline.
+- `marca_tiempo_unix` (`unix_time` del dataset): no es confiable como tiempo. Está unos 7 años
+  atrás de `fecha_hora_transaccion` (2013 contra 2020) y en `fraudTrain` el desfase no es
+  constante: 2557 días, 2556 entre el 2019-02-28 y el 2020-03-01. El tiempo del evento es siempre
+  `fecha_hora_transaccion`, la misma que usan el almacén offline y el batch.
 """
 
 import json

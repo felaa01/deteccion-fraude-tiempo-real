@@ -33,9 +33,18 @@ PROYECTO_DE_PRUEBA = "prueba_streaming_estado"
 
 
 def _entrante(
-    tarjeta: int, id_transaccion: str, marca: int, monto: float = 10.0, categoria: str = "comida"
+    tarjeta: int,
+    id_transaccion: str,
+    marca: int,
+    monto: float = 10.0,
+    categoria: str = "comida",
+    latitud: float = 0.0,
+    longitud: float = 0.0,
 ) -> TransaccionEntrante:
-    return TransaccionEntrante(tarjeta, TransaccionTarjeta(id_transaccion, marca, monto, categoria))
+    return TransaccionEntrante(
+        tarjeta,
+        TransaccionTarjeta(id_transaccion, marca, monto, categoria, latitud, longitud),
+    )
 
 
 def prueba_aplicar_transacciones_ordena_por_marca_dentro_de_cada_tarjeta() -> None:
@@ -82,13 +91,15 @@ def _mensajes(sesion_spark: SparkSession, valores: list[bytes]) -> pd.DataFrame:
 def prueba_parsear_mensajes_convierte_json_a_columnas_tipadas(sesion_spark: SparkSession) -> None:
     valor = (
         b'{"id_transaccion":"tx1","numero_tarjeta":123,"fecha_hora_transaccion":'
-        b'"2020-06-21T12:14:25","monto":29.84,"categoria":"ocio","otro_campo":"se ignora"}'
+        b'"2020-06-21T12:14:25","monto":29.84,"categoria":"ocio",'
+        b'"latitud_comercio":1.5,"longitud_comercio":2.5,"otro_campo":"se ignora"}'
     )
 
     resultado = _mensajes(sesion_spark, [valor])
 
     fila = resultado.iloc[0]
     assert (fila["numero_tarjeta"], fila["id_transaccion"], fila["monto"]) == (123, "tx1", 29.84)
+    assert (fila["latitud_comercio"], fila["longitud_comercio"]) == (1.5, 2.5)
     assert fila["marca_tiempo"] == int(datetime(2020, 6, 21, 12, 14, 25, tzinfo=UTC).timestamp())
 
 
@@ -98,7 +109,7 @@ def prueba_parsear_mensajes_no_depende_de_la_zona_horaria_de_la_sesion(
     """Regresión del bug de la semana 3: la fecha es UTC, no la zona de la sesión."""
     valor = (
         b'{"id_transaccion":"tx1","numero_tarjeta":1,"fecha_hora_transaccion":'
-        b'"2020-06-21T12:14:25","monto":1.0,"categoria":"ocio"}'
+        b'"2020-06-21T12:14:25","monto":1.0,"categoria":"ocio","latitud_comercio":1.5,"longitud_comercio":2.5}'
     )
     zona_original = sesion_spark.conf.get("spark.sql.session.timeZone")
     sesion_spark.conf.set("spark.sql.session.timeZone", "America/Argentina/Buenos_Aires")
@@ -114,7 +125,7 @@ def prueba_parsear_mensajes_no_depende_de_la_zona_horaria_de_la_sesion(
 def prueba_mensajes_invalidos_se_descartan_y_se_cuentan(sesion_spark: SparkSession) -> None:
     valido = (
         b'{"id_transaccion":"tx1","numero_tarjeta":1,"fecha_hora_transaccion":'
-        b'"2020-06-21T12:14:25","monto":1.0,"categoria":"ocio"}'
+        b'"2020-06-21T12:14:25","monto":1.0,"categoria":"ocio","latitud_comercio":1.5,"longitud_comercio":2.5}'
     )
     sin_monto = (
         b'{"id_transaccion":"tx2","numero_tarjeta":1,'
@@ -165,7 +176,7 @@ def prueba_procesar_lote_lee_actualiza_y_escribe_en_redis(
 def _publicar(topico: str, transacciones: pd.DataFrame) -> None:
     productor = Producer({"bootstrap.servers": "localhost:9092"})
     for fila in transacciones.to_dict("records"):
-        fecha = datetime.fromtimestamp(fila["marca_tiempo_unix"], tz=UTC)
+        fecha = datetime.fromtimestamp(fila["marca_tiempo"], tz=UTC)
         cuerpo = json.dumps(
             {
                 "id_transaccion": fila["id_transaccion"],
@@ -173,6 +184,8 @@ def _publicar(topico: str, transacciones: pd.DataFrame) -> None:
                 "fecha_hora_transaccion": fecha.strftime("%Y-%m-%dT%H:%M:%S"),
                 "monto": fila["monto"],
                 "categoria": fila["categoria"],
+                "latitud_comercio": fila["latitud_comercio"],
+                "longitud_comercio": fila["longitud_comercio"],
             }
         )
         productor.produce(topico, key=str(fila["numero_tarjeta"]), value=cuerpo.encode())
@@ -218,9 +231,11 @@ def prueba_streaming_de_punta_a_punta(
                 _entrante(
                     f["numero_tarjeta"],
                     f["id_transaccion"],
-                    f["marca_tiempo_unix"],
+                    f["marca_tiempo"],
                     f["monto"],
                     f["categoria"],
+                    f["latitud_comercio"],
+                    f["longitud_comercio"],
                 )
                 for f in transacciones_aleatorias.to_dict("records")
             ],

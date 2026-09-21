@@ -21,9 +21,11 @@ ESQUEMA = StructType(
     [
         StructField("id_transaccion", StringType()),
         StructField("numero_tarjeta", LongType()),
-        StructField("marca_tiempo_unix", LongType()),
+        StructField("marca_tiempo", LongType()),
         StructField("categoria", StringType()),
         StructField("monto", DoubleType()),
+        StructField("latitud_comercio", DoubleType()),
+        StructField("longitud_comercio", DoubleType()),
     ]
 )
 
@@ -33,20 +35,25 @@ PROYECTO_DE_PRUEBA = "prueba_estado_inicial"
 
 def _con_fecha(sesion_spark: SparkSession, transacciones: pd.DataFrame) -> DataFrame:
     return sesion_spark.createDataFrame(transacciones, ESQUEMA).withColumn(
-        "fecha_hora_transaccion", col("marca_tiempo_unix").cast("timestamp")
+        "fecha_hora_transaccion", col("marca_tiempo").cast("timestamp")
     )
 
 
 def _estado_secuencial(transacciones: pd.DataFrame) -> dict[int, EstadoTarjeta]:
     """Lo que daría el streaming: aplicar `actualizar_estado` una transacción por vez."""
     estados: dict[int, EstadoTarjeta] = {}
-    orden = transacciones.sort_values(["marca_tiempo_unix", "id_transaccion"])
+    orden = transacciones.sort_values(["marca_tiempo", "id_transaccion"])
     for fila in orden.to_dict("records"):
         tarjeta = fila["numero_tarjeta"]
         estados[tarjeta] = actualizar_estado(
             estados.get(tarjeta),
             TransaccionTarjeta(
-                fila["id_transaccion"], fila["marca_tiempo_unix"], fila["monto"], fila["categoria"]
+                fila["id_transaccion"],
+                fila["marca_tiempo"],
+                fila["monto"],
+                fila["categoria"],
+                fila["latitud_comercio"],
+                fila["longitud_comercio"],
             ),
         )
     return estados
@@ -60,6 +67,8 @@ def _assert_equivalentes(obtenido: EstadoTarjeta | None, esperado: EstadoTarjeta
     assert obtenido.marcas_recientes == esperado.marcas_recientes
     assert obtenido.ultima_marca == esperado.ultima_marca
     assert obtenido.ultimo_id_transaccion == esperado.ultimo_id_transaccion
+    assert obtenido.ultima_latitud_comercio == esperado.ultima_latitud_comercio
+    assert obtenido.ultima_longitud_comercio == esperado.ultima_longitud_comercio
     assert obtenido.monto_total == pytest.approx(esperado.monto_total, rel=1e-9)
     assert obtenido.montos_recientes == pytest.approx(esperado.montos_recientes, rel=1e-9)
 
@@ -81,6 +90,8 @@ def prueba_estado_inicial_de_spark_coincide_con_aplicar_actualizar_estado(
             montos_recientes=tuple(fila["montos_recientes"]),
             ultima_marca=fila["ultima_marca"],
             ultimo_id_transaccion=fila["ultimo_id_transaccion"],
+            ultima_latitud_comercio=fila["ultima_latitud_comercio"],
+            ultima_longitud_comercio=fila["ultima_longitud_comercio"],
         )
         _assert_equivalentes(obtenido, esperado[fila["numero_tarjeta"]])
 

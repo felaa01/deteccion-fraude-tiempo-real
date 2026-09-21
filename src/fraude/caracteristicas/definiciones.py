@@ -53,6 +53,8 @@ def crear_vista_caracteristicas_historicas(fuente: FileSource) -> FeatureView:
             Field(name="monto_acumulado_tarjeta", dtype=Float64),
             Field(name="ratio_monto_promedio_tarjeta", dtype=Float64),
             Field(name="categoria_nueva_para_tarjeta", dtype=Bool),
+            Field(name="distancia_transaccion_anterior_km", dtype=Float64),
+            Field(name="velocidad_implicita_kmh", dtype=Float64),
         ],
         source=fuente,
     )
@@ -87,6 +89,8 @@ def crear_vista_estado_tarjeta(fuente_inicial: FileSource) -> FeatureView:
             Field(name="montos_recientes", dtype=Array(Float64)),
             Field(name="ultima_marca", dtype=Int64),
             Field(name="ultimo_id_transaccion", dtype=String),
+            Field(name="ultima_latitud_comercio", dtype=Float64),
+            Field(name="ultima_longitud_comercio", dtype=Float64),
         ],
         source=fuente_push,
     )

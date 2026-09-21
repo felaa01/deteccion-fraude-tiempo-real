@@ -16,9 +16,9 @@ from fraude.caracteristicas.estado_tarjeta import SEGUNDOS_24_HORAS
 def calcular_estado_tarjeta(transacciones: DataFrame) -> DataFrame:
     """Una fila por tarjeta con las columnas de `EstadoTarjeta` y `fecha_hora_ultima_transaccion`.
 
-    Requiere `numero_tarjeta`, `id_transaccion`, `categoria`, `monto` y
-    `fecha_hora_transaccion` (timestamp). El tiempo se toma de `fecha_hora_transaccion`, no de
-    `marca_tiempo_unix`, que en este dataset está desfasada 7 años.
+    Requiere `numero_tarjeta`, `id_transaccion`, `categoria`, `monto`, `latitud_comercio`,
+    `longitud_comercio` y `fecha_hora_transaccion` (timestamp). El tiempo se toma de
+    `fecha_hora_transaccion`, no de `unix_time` (ver `fraude.lotes.comun.cargar_transacciones`).
     """
     con_marca = transacciones.withColumn(
         "marca_tiempo", F.col("fecha_hora_transaccion").cast("long")
@@ -30,7 +30,9 @@ def calcular_estado_tarjeta(transacciones: DataFrame) -> DataFrame:
         F.count("*").alias("cantidad_total"),
         F.sum("monto").alias("monto_total"),
         F.array_sort(F.collect_set("categoria")).alias("categorias_vistas"),
-        F.max(F.struct("marca_tiempo", "id_transaccion")).alias("ultima"),
+        F.max(
+            F.struct("marca_tiempo", "id_transaccion", "latitud_comercio", "longitud_comercio")
+        ).alias("ultima"),
     )
     resumen = resumen.select(
         "numero_tarjeta",
@@ -39,6 +41,8 @@ def calcular_estado_tarjeta(transacciones: DataFrame) -> DataFrame:
         "categorias_vistas",
         F.col("ultima.marca_tiempo").alias("ultima_marca"),
         F.col("ultima.id_transaccion").alias("ultimo_id_transaccion"),
+        F.col("ultima.latitud_comercio").alias("ultima_latitud_comercio"),
+        F.col("ultima.longitud_comercio").alias("ultima_longitud_comercio"),
     )
 
     # Recientes: todo lo que cae a menos de 24 h de la última transacción de la tarjeta
@@ -69,5 +73,7 @@ def calcular_estado_tarjeta(transacciones: DataFrame) -> DataFrame:
         "montos_recientes",
         "ultima_marca",
         "ultimo_id_transaccion",
+        "ultima_latitud_comercio",
+        "ultima_longitud_comercio",
         F.col("ultima_marca").cast("timestamp").alias("fecha_hora_ultima_transaccion"),
     )

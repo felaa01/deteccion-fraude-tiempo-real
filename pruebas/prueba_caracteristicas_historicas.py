@@ -3,15 +3,18 @@ import pytest
 from pyspark.sql import Row, SparkSession
 from pyspark.sql.types import DoubleType, LongType, StringType, StructField, StructType
 
+from fraude.caracteristicas.geografia import distancia_haversine_km
 from fraude.lotes.caracteristicas_historicas import agregar_caracteristicas_historicas
 
 ESQUEMA = StructType(
     [
         StructField("id_transaccion", StringType()),
         StructField("numero_tarjeta", LongType()),
-        StructField("marca_tiempo_unix", LongType()),
+        StructField("marca_tiempo", LongType()),
         StructField("categoria", StringType()),
         StructField("monto", DoubleType()),
+        StructField("latitud_comercio", DoubleType()),
+        StructField("longitud_comercio", DoubleType()),
     ]
 )
 
@@ -22,30 +25,38 @@ FILAS = [
     Row(
         id_transaccion="tx_a",
         numero_tarjeta=111,
-        marca_tiempo_unix=0,
+        marca_tiempo=0,
         categoria="comida",
         monto=10.0,
+        latitud_comercio=0.0,
+        longitud_comercio=0.0,
     ),
     Row(
         id_transaccion="tx_b",
         numero_tarjeta=111,
-        marca_tiempo_unix=300,
+        marca_tiempo=300,
         categoria="comida",
         monto=20.0,
+        latitud_comercio=0.0,
+        longitud_comercio=1.0,
     ),
     Row(
         id_transaccion="tx_c",
         numero_tarjeta=111,
-        marca_tiempo_unix=1200,
+        marca_tiempo=1200,
         categoria="ropa",
         monto=30.0,
+        latitud_comercio=1.0,
+        longitud_comercio=1.0,
     ),
     Row(
         id_transaccion="tx_d",
         numero_tarjeta=222,
-        marca_tiempo_unix=100,
+        marca_tiempo=100,
         categoria="comida",
         monto=5.0,
+        latitud_comercio=5.0,
+        longitud_comercio=5.0,
     ),
 ]
 
@@ -122,3 +133,40 @@ def prueba_no_mezcla_historia_entre_tarjetas_distintas(
 
     assert fila["cantidad_transacciones_24h"] == 0
     assert pd.isna(fila["monto_acumulado_tarjeta"])
+
+
+def prueba_primera_transaccion_no_tiene_distancia_ni_velocidad(
+    sesion_spark: SparkSession,
+) -> None:
+    fila = _calcular(sesion_spark).loc["tx_a"]
+
+    assert pd.isna(fila["distancia_transaccion_anterior_km"])
+    assert pd.isna(fila["velocidad_implicita_kmh"])
+
+
+def prueba_distancia_y_velocidad_respecto_de_la_transaccion_anterior(
+    sesion_spark: SparkSession,
+) -> None:
+    fila = _calcular(sesion_spark).loc["tx_b"]
+
+    # tx_a (0, 0) -> tx_b (0, 1) en 300 segundos.
+    distancia = distancia_haversine_km(0.0, 0.0, 0.0, 1.0)
+    assert fila["distancia_transaccion_anterior_km"] == pytest.approx(distancia)
+    assert fila["velocidad_implicita_kmh"] == pytest.approx(distancia / (300 / 3600))
+
+
+def prueba_la_transaccion_anterior_es_la_inmediata_y_no_la_primera(
+    sesion_spark: SparkSession,
+) -> None:
+    fila = _calcular(sesion_spark).loc["tx_c"]
+
+    # tx_b (0, 1) -> tx_c (1, 1): se mide contra tx_b, no contra tx_a.
+    assert fila["distancia_transaccion_anterior_km"] == pytest.approx(
+        distancia_haversine_km(0.0, 1.0, 1.0, 1.0)
+    )
+
+
+def prueba_la_distancia_no_mezcla_tarjetas_distintas(sesion_spark: SparkSession) -> None:
+    fila = _calcular(sesion_spark).loc["tx_d"]
+
+    assert pd.isna(fila["distancia_transaccion_anterior_km"])

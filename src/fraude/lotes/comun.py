@@ -35,6 +35,8 @@ def crear_sesion_spark(
 def cargar_transacciones(spark: SparkSession, rutas_csv: list[Path]) -> DataFrame:
     """Lee los CSV crudos, los renombra al español y castea las columnas que se usan.
 
+    Devuelve, además de las columnas del dataset, `marca_tiempo` (segundos desde la época, UTC).
+
     Se lee con `inferSchema=False` (todo como string) y se castea a mano en vez de
     confiar en la inferencia de tipos de Spark: es explícito y evita una pasada extra
     de Spark sobre todo el archivo solo para adivinar tipos.
@@ -54,8 +56,17 @@ def cargar_transacciones(spark: SparkSession, rutas_csv: list[Path]) -> DataFram
         "categoria",
         "id_transaccion",
         F.col("monto").cast("double").alias("monto"),
-        F.col("marca_tiempo_unix").cast("long").alias("marca_tiempo_unix"),
+        F.col("latitud_comercio").cast("double").alias("latitud_comercio"),
+        F.col("longitud_comercio").cast("double").alias("longitud_comercio"),
         F.to_timestamp("fecha_hora_transaccion", "yyyy-MM-dd HH:mm:ss").alias(
             "fecha_hora_transaccion"
         ),
+    ).withColumn(
+        # Segundos desde la época, derivados de la FECHA (no de `unix_time`). En `fraudTrain`
+        # el desfase entre las dos columnas no es constante (2557 días, 2556 entre el
+        # 2019-02-28 y el 2020-03-01) y el archivo está ordenado por `unix_time` pero no por
+        # fecha; el streaming y el servicio solo ven la fecha, así que el batch tiene que
+        # ordenar y ventanear con la misma definición de tiempo para no producir skew.
+        "marca_tiempo",
+        F.col("fecha_hora_transaccion").cast("long"),
     )

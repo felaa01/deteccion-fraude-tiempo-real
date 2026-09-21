@@ -45,11 +45,13 @@ def transacciones_aleatorias() -> pd.DataFrame:
                 {
                     "id_transaccion": f"tx_{len(filas):05d}",
                     "numero_tarjeta": tarjeta,
-                    "marca_tiempo_unix": marca,
+                    "marca_tiempo": marca,
                     "categoria": str(
                         generador.choice(["comida", "ropa", "hogar", "ocio", "viajes"])
                     ),
                     "monto": float(np.round(generador.uniform(1, 500), 2)),
+                    "latitud_comercio": float(np.round(generador.uniform(25, 48), 4)),
+                    "longitud_comercio": float(np.round(generador.uniform(-120, -75), 4)),
                 }
             )
     return pd.DataFrame(filas)

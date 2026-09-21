@@ -28,6 +28,8 @@ CAMPOS_ESTADO = (
     "montos_recientes",
     "ultima_marca",
     "ultimo_id_transaccion",
+    "ultima_latitud_comercio",
+    "ultima_longitud_comercio",
 )
 
 
@@ -43,6 +45,8 @@ def estados_a_dataframe(estados: Mapping[int, EstadoTarjeta]) -> pd.DataFrame:
             "montos_recientes": list(estado.montos_recientes),
             "ultima_marca": estado.ultima_marca,
             "ultimo_id_transaccion": estado.ultimo_id_transaccion,
+            "ultima_latitud_comercio": estado.ultima_latitud_comercio,
+            "ultima_longitud_comercio": estado.ultima_longitud_comercio,
             COLUMNA_TIEMPO_ESTADO: datetime.fromtimestamp(estado.ultima_marca, tz=UTC),
         }
         for tarjeta, estado in estados.items()
@@ -62,6 +66,8 @@ def _a_estado(valores: Mapping[str, Any], posicion: int) -> EstadoTarjeta | None
         montos_recientes=tuple(float(m) for m in valores["montos_recientes"][posicion]),
         ultima_marca=int(valores["ultima_marca"][posicion]),
         ultimo_id_transaccion=str(valores["ultimo_id_transaccion"][posicion]),
+        ultima_latitud_comercio=float(valores["ultima_latitud_comercio"][posicion]),
+        ultima_longitud_comercio=float(valores["ultima_longitud_comercio"][posicion]),
     )
 
 

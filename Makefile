@@ -71,6 +71,9 @@ kafka-reiniciar-topico:
 
 # Vuelve todo al punto de partida para una corrida limpia: tópico vacío, sin checkpoint (los
 # offsets guardados no valen para un tópico nuevo) y el estado de Redis al corte de fraudTrain.
+# Se vacía la base 0 de Redis antes de la carga: el arranque en frío solo escribe las tarjetas
+# de fraudTrain y, sin vaciar, las que aparecen recién en fraudTest conservarían su estado viejo.
 streaming-reiniciar: kafka-reiniciar-topico
 	rm -rf datos_features/checkpoint_streaming
+	docker compose --profile tiempo-real exec redis redis-cli -n 0 flushdb
 	$(MAKE) arranque-en-frio

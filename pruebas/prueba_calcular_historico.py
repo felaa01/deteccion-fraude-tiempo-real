@@ -3,6 +3,7 @@ from pathlib import Path
 import pandas as pd
 from pyspark.sql import SparkSession
 
+from fraude.lotes.caracteristicas_historicas import agregar_caracteristicas_historicas
 from fraude.lotes.comun import cargar_transacciones
 
 ENCABEZADO = (
@@ -38,4 +39,41 @@ def prueba_no_corre_los_timestamps_por_la_zona_horaria_del_sistema(
     resultado = pd.read_parquet(ruta_parquet)
 
     assert resultado.loc[0, "fecha_hora_transaccion"] == pd.Timestamp("2019-01-01 00:00:18")
-    assert resultado.loc[0, "marca_tiempo_unix"] == 1325376018
+    # La marca de tiempo sale de la FECHA (2019-01-01 00:00:18 UTC), no de `unix_time`.
+    assert resultado.loc[0, "marca_tiempo"] == 1546300818
+
+
+def _fila(indice: int, fecha: str, id_transaccion: str, unix_time: int, monto: float) -> str:
+    return (
+        f'{indice},{fecha},2703186189652095,"fraud_Rippin, Kub and Mann",misc_net,{monto},'
+        "Jennifer,Banks,F,561 Perry Cove,Moravian Falls,NC,28654,36.0788,-81.1781,3495,"
+        '"Psychologist, counselling",1988-03-09,'
+        f"{id_transaccion},{unix_time},36.011293,-82.048315,0"
+    )
+
+
+def prueba_el_batch_ordena_por_fecha_aunque_unix_time_diga_otra_cosa(
+    sesion_spark: SparkSession, tmp_path: Path
+) -> None:
+    # Regresión con datos reales: en `fraudTrain` el desfase entre `unix_time` y la fecha no es
+    # constante (2557 días, y 2556 entre el 2019-02-28 y el 2020-03-01), así que hay filas cuyo
+    # orden por `unix_time` contradice el orden por fecha. El streaming y el servicio solo ven
+    # la fecha; si el batch ordenara por `unix_time`, el entrenamiento vería otra "historia".
+    ruta_csv = tmp_path / "fraudTrain.csv"
+    # Por fecha, `tx_1` (13:00) es anterior a `tx_2` (14:00); por `unix_time` es al revés.
+    filas = [
+        ENCABEZADO,
+        _fila(0, "2019-02-28 13:00:00", "tx_1", 1_330_000_100, 10.0),
+        _fila(1, "2019-02-28 14:00:00", "tx_2", 1_330_000_000, 30.0),
+    ]
+    ruta_csv.write_text("\n".join(filas) + "\n")
+
+    resultado = (
+        agregar_caracteristicas_historicas(cargar_transacciones(sesion_spark, [ruta_csv]))
+        .toPandas()
+        .set_index("id_transaccion")
+    )
+
+    assert resultado.loc["tx_1", "cantidad_transacciones_24h"] == 0
+    assert resultado.loc["tx_2", "cantidad_transacciones_24h"] == 1
+    assert resultado.loc["tx_2", "monto_acumulado_tarjeta"] == 10.0

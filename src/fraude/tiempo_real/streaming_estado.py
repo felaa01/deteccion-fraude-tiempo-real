@@ -43,6 +43,8 @@ ESQUEMA_MENSAJE = StructType(
         StructField("fecha_hora_transaccion", StringType()),
         StructField("monto", DoubleType()),
         StructField("categoria", StringType()),
+        StructField("latitud_comercio", DoubleType()),
+        StructField("longitud_comercio", DoubleType()),
     ]
 )
 
@@ -68,7 +70,15 @@ def parsear_mensajes(mensajes: DataFrame) -> DataFrame:
                 F.concat(F.col("fecha_hora_transaccion"), F.lit("Z")), "yyyy-MM-dd'T'HH:mm:ssX"
             ).cast("long"),
         )
-        .select("numero_tarjeta", "id_transaccion", "marca_tiempo", "monto", "categoria")
+        .select(
+            "numero_tarjeta",
+            "id_transaccion",
+            "marca_tiempo",
+            "monto",
+            "categoria",
+            "latitud_comercio",
+            "longitud_comercio",
+        )
     )
 
 
@@ -78,13 +88,20 @@ def a_transacciones_entrantes(
     """Filas de `parsear_mensajes` a transacciones; devuelve también cuántas eran inválidas."""
     validas: list[TransaccionEntrante] = []
     for fila in filas:
-        tarjeta, id_transaccion, marca, monto, categoria = fila
+        tarjeta, id_transaccion, marca, monto, categoria, latitud, longitud = fila
         if None in fila:
             continue
         validas.append(
             TransaccionEntrante(
                 int(tarjeta),
-                TransaccionTarjeta(str(id_transaccion), int(marca), float(monto), str(categoria)),
+                TransaccionTarjeta(
+                    str(id_transaccion),
+                    int(marca),
+                    float(monto),
+                    str(categoria),
+                    float(latitud),
+                    float(longitud),
+                ),
             )
         )
     return validas, len(filas) - len(validas)

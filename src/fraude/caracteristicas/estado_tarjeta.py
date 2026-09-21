@@ -17,10 +17,16 @@ Las reglas replican las del batch, que son las que definen qué vio "el pasado" 
 - Si la tarjeta no tiene historia, el acumulado y el ratio son nulos (no cero).
 - "Categoría nueva" sí cuenta a las transacciones del mismo segundo que ya fueron aplicadas,
   porque el batch desempata por `id_transaccion` con `row_number`.
+- La **transacción anterior** (para la distancia y la velocidad) es la previa de la tarjeta en
+  el orden `(marca, id)`, como un `lag`: ahí sí cuenta una del mismo segundo. Así el estado solo
+  necesita guardar la ubicación de la última transacción. Si el intervalo es de 0 segundos la
+  velocidad es nula (no se puede dividir por cero), aunque la distancia sí se calcula.
 """
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+
+from fraude.caracteristicas.geografia import distancia_haversine_km
 
 SEGUNDOS_10_MINUTOS = 10 * 60
 SEGUNDOS_1_HORA = 60 * 60
@@ -46,6 +52,8 @@ class TransaccionTarjeta:
     marca_tiempo: int
     monto: float
     categoria: str
+    latitud_comercio: float
+    longitud_comercio: float
 
 
 @dataclass(frozen=True)
@@ -60,6 +68,9 @@ class EstadoTarjeta:
     `categorias_vistas` está siempre ordenada alfabéticamente: es la forma canónica, para que
     el estado calculado por lotes (arranque en frío) y el calculado transacción a transacción
     (streaming) se puedan comparar por igualdad sin depender del orden de aparición.
+
+    `ultima_latitud_comercio` y `ultima_longitud_comercio` son la ubicación de la última
+    transacción aplicada, para la distancia y la velocidad respecto de la siguiente.
     """
 
     cantidad_total: int
@@ -69,6 +80,8 @@ class EstadoTarjeta:
     montos_recientes: tuple[float, ...]
     ultima_marca: int
     ultimo_id_transaccion: str
+    ultima_latitud_comercio: float
+    ultima_longitud_comercio: float
 
 
 @dataclass(frozen=True)
@@ -81,6 +94,8 @@ class CaracteristicasHistoricas:
     monto_acumulado_tarjeta: float | None
     ratio_monto_promedio_tarjeta: float | None
     categoria_nueva_para_tarjeta: bool
+    distancia_transaccion_anterior_km: float | None
+    velocidad_implicita_kmh: float | None
 
 
 def actualizar_estado(
@@ -104,6 +119,8 @@ def actualizar_estado(
             montos_recientes=(transaccion.monto,),
             ultima_marca=marca,
             ultimo_id_transaccion=transaccion.id_transaccion,
+            ultima_latitud_comercio=transaccion.latitud_comercio,
+            ultima_longitud_comercio=transaccion.longitud_comercio,
         )
 
     if (marca, transaccion.id_transaccion) <= (estado.ultima_marca, estado.ultimo_id_transaccion):
@@ -128,11 +145,18 @@ def actualizar_estado(
         montos_recientes=(*(monto for _, monto in conservadas), transaccion.monto),
         ultima_marca=marca,
         ultimo_id_transaccion=transaccion.id_transaccion,
+        ultima_latitud_comercio=transaccion.latitud_comercio,
+        ultima_longitud_comercio=transaccion.longitud_comercio,
     )
 
 
 def calcular_caracteristicas(
-    estado: EstadoTarjeta | None, marca_tiempo: int, monto: float, categoria: str
+    estado: EstadoTarjeta | None,
+    marca_tiempo: int,
+    monto: float,
+    categoria: str,
+    latitud_comercio: float,
+    longitud_comercio: float,
 ) -> CaracteristicasHistoricas:
     """Características de una transacción que ocurre en `marca_tiempo`, dado el estado previo.
 
@@ -149,6 +173,8 @@ def calcular_caracteristicas(
             monto_acumulado_tarjeta=None,
             ratio_monto_promedio_tarjeta=None,
             categoria_nueva_para_tarjeta=True,
+            distancia_transaccion_anterior_km=None,
+            velocidad_implicita_kmh=None,
         )
     if marca_tiempo < estado.ultima_marca:
         raise ValueError(
@@ -170,6 +196,17 @@ def calcular_caracteristicas(
     cantidad_previa = estado.cantidad_total - len(mismo_segundo)
     monto_previo = estado.monto_total - sum(mismo_segundo)
 
+    # Transacción anterior = la última del estado (orden `(marca, id)`), aunque sea del mismo
+    # segundo. Con 0 segundos de diferencia no hay velocidad, pero la distancia sí existe.
+    distancia = distancia_haversine_km(
+        estado.ultima_latitud_comercio,
+        estado.ultima_longitud_comercio,
+        latitud_comercio,
+        longitud_comercio,
+    )
+    segundos = marca_tiempo - estado.ultima_marca
+    velocidad = distancia / (segundos / 3600) if segundos > 0 else None
+
     tiene_historia = cantidad_previa > 0
     return CaracteristicasHistoricas(
         cantidad_transacciones_10min=contar(SEGUNDOS_10_MINUTOS),
@@ -180,4 +217,6 @@ def calcular_caracteristicas(
             monto / (monto_previo / cantidad_previa) if tiene_historia else None
         ),
         categoria_nueva_para_tarjeta=categoria not in estado.categorias_vistas,
+        distancia_transaccion_anterior_km=distancia,
+        velocidad_implicita_kmh=velocidad,
     )

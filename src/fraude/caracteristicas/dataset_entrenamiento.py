@@ -20,6 +20,8 @@ CARACTERISTICAS_HISTORICAS = [
     f"{NOMBRE_VISTA_CARACTERISTICAS_HISTORICAS}:monto_acumulado_tarjeta",
     f"{NOMBRE_VISTA_CARACTERISTICAS_HISTORICAS}:ratio_monto_promedio_tarjeta",
     f"{NOMBRE_VISTA_CARACTERISTICAS_HISTORICAS}:categoria_nueva_para_tarjeta",
+    f"{NOMBRE_VISTA_CARACTERISTICAS_HISTORICAS}:distancia_transaccion_anterior_km",
+    f"{NOMBRE_VISTA_CARACTERISTICAS_HISTORICAS}:velocidad_implicita_kmh",
 ]
 
 

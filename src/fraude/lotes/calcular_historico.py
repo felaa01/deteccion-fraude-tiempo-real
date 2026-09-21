@@ -34,6 +34,8 @@ COLUMNAS_DE_SALIDA = [
     "monto_acumulado_tarjeta",
     "ratio_monto_promedio_tarjeta",
     "categoria_nueva_para_tarjeta",
+    "distancia_transaccion_anterior_km",
+    "velocidad_implicita_kmh",
 ]
 
 

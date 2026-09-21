@@ -182,8 +182,10 @@ Hecho:
   `tiempo-real`, `make tiempo-real-arriba`, tópico `transacciones` con 3 particiones, ~394 MB) y productor
   (`src/fraude/productor/`, `make productor`) con `confluent-kafka`: reproduce `fraudTest` ordenado por
   fecha (desempate por `id_transaccion`), clave = `numero_tarjeta`, ritmo acelerado agendado contra el
-  inicio. El mensaje excluye `es_fraude` y datos personales. `unix_time` del dataset está desfasado 7
-  años respecto de la fecha (2013 vs 2020): el event time es `fecha_hora_transaccion`. Validado contra
+  inicio. El mensaje excluye `es_fraude` y datos personales. `unix_time` del dataset no es confiable:
+  está ~7 años atrás de la fecha (2013 vs 2020) y en `fraudTrain` el desfase no es constante (2557
+  días, 2556 entre el 2019-02-28 y el 2020-03-01) y el archivo está ordenado por `unix_time` pero no
+  por fecha: el event time y el orden son siempre `fecha_hora_transaccion`. Validado contra
   el broker real: 0 tarjetas en más de una partición, 0 transacciones fuera de orden.
 
   Estado por tarjeta (`caracteristicas/estado_tarjeta.py`): funciones puras `actualizar_estado`
@@ -217,9 +219,21 @@ Hecho:
   mensajes, 56 lotes, 61 s, ~500 MB de RSS pico) da un estado idéntico al batch de Spark sobre
   `fraudTrain` + `fraudTest` en las 999 tarjetas. `make streaming-reiniciar` vuelve todo a cero.
 
+  Distancia y velocidad respecto de la transacción anterior (`distancia_transaccion_anterior_km`,
+  `velocidad_implicita_kmh`): el estado guarda la ubicación del comercio de la última transacción;
+  "anterior" es la previa en orden `(fecha, id)` (como un `lag`), velocidad nula si el intervalo es 0
+  s. Implementada offline (Spark), online (`calcular_caracteristicas`) y en Feast, con
+  `caracteristicas/geografia.py`. **Prueba de skew con datos reales: 0 celdas distintas de
+  14.819.152** (8 características, 1.852.394 transacciones). Encontró un bug de la semana 3: el
+  batch ordenaba y ventaneaba por `unix_time`, que no equivale a la fecha en `fraudTrain`; ahora usa
+  `marca_tiempo` derivada de la fecha (con prueba de regresión). `read_csv` con
+  `float_precision="round_trip"` para igualar el `cast` de Spark, y `make streaming-reiniciar` ahora
+  vacía la base 0 de Redis.
+
 Próximos pasos (resto de la semana 4, según el plan):
-1. Características en el momento de la solicitud en el servicio (`/predecir` lee el estado de Redis
-   y usa `calcular_caracteristicas`) y la prueba de training-serving skew de punta a punta (offline
-   vs. online, pasando por Kafka, Spark, Redis y el servicio).
+1. Servicio: `/predecir` lee el estado de Redis y usa `calcular_caracteristicas`, y la prueba de
+   training-serving skew de punta a punta (offline vs. online, pasando por Kafka, Spark, Redis y el
+   servicio). Decidir aparte si se reentrena el modelo con las características nuevas (hoy el
+   campeón solo usa las básicas).
 
 Actualizá esta sección cada vez que se complete un hito.

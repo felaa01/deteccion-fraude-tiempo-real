@@ -31,9 +31,15 @@ TARJETA_INEXISTENTE = 9_000_000_000_000_003
 
 
 def _estado() -> EstadoTarjeta:
-    estado = actualizar_estado(None, TransaccionTarjeta("tx_1", 1_600_000_000, 10.5, "comida"))
-    estado = actualizar_estado(estado, TransaccionTarjeta("tx_2", 1_600_000_060, 20.25, "ropa"))
-    return actualizar_estado(estado, TransaccionTarjeta("tx_3", 1_600_000_060, 5.0, "comida"))
+    estado = actualizar_estado(
+        None, TransaccionTarjeta("tx_1", 1_600_000_000, 10.5, "comida", 0.0, 0.0)
+    )
+    estado = actualizar_estado(
+        estado, TransaccionTarjeta("tx_2", 1_600_000_060, 20.25, "ropa", 0.0, 0.0)
+    )
+    return actualizar_estado(
+        estado, TransaccionTarjeta("tx_3", 1_600_000_060, 5.0, "comida", 0.0, 0.0)
+    )
 
 
 def _tienda_de_prueba(directorio: Path) -> FeatureStore:
@@ -60,7 +66,9 @@ def prueba_ida_y_vuelta_por_redis(tmp_path: Path, redis_de_prueba: None) -> None
     """Escribe el estado con `push` y lo lee igual, incluido el de una tarjeta desconocida."""
     tienda = _tienda_de_prueba(tmp_path)
     estado_a = _estado()
-    estado_b = actualizar_estado(None, TransaccionTarjeta("tx_9", 1_600_000_100, 99.99, "ocio"))
+    estado_b = actualizar_estado(
+        None, TransaccionTarjeta("tx_9", 1_600_000_100, 99.99, "ocio", 0.0, 0.0)
+    )
 
     escribir_estados(tienda, {TARJETA_A: estado_a, TARJETA_B: estado_b})
     leidos = leer_estados(tienda, [TARJETA_A, TARJETA_B, TARJETA_INEXISTENTE])
@@ -76,8 +84,12 @@ def prueba_dos_escrituras_con_el_mismo_timestamp_no_se_pierden(
 ) -> None:
     """Regresión de `skip_dedup`: Feast descartaría la segunda por tener el mismo instante."""
     tienda = _tienda_de_prueba(tmp_path)
-    primero = actualizar_estado(None, TransaccionTarjeta("tx_a", 1_600_000_000, 10.0, "comida"))
-    segundo = actualizar_estado(primero, TransaccionTarjeta("tx_b", 1_600_000_000, 20.0, "comida"))
+    primero = actualizar_estado(
+        None, TransaccionTarjeta("tx_a", 1_600_000_000, 10.0, "comida", 0.0, 0.0)
+    )
+    segundo = actualizar_estado(
+        primero, TransaccionTarjeta("tx_b", 1_600_000_000, 20.0, "comida", 0.0, 0.0)
+    )
 
     escribir_estados(tienda, {TARJETA_A: primero})
     escribir_estados(tienda, {TARJETA_A: segundo})

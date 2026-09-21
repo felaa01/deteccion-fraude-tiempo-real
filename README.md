@@ -160,8 +160,12 @@ make tiempo-real-abajo
   orden en que ocurrieron, que es lo que necesitan las ventanas por tarjeta.
 - **El mensaje no lleva `es_fraude`** (las etiquetas llegan con demora, regla 6) ni datos personales
   que ninguna característica use.
-- **El tiempo del evento es `fecha_hora_transaccion`.** La columna `unix_time` del dataset está
-  desfasada exactamente 7 años (2013 contra 2020) y no se usa.
+- **El tiempo del evento es `fecha_hora_transaccion`.** La columna `unix_time` del dataset no se
+  usa: está unos 7 años atrás (2013 contra 2020) y en `fraudTrain` el desfase **no es constante**
+  (2557 días, y 2556 entre el 2019-02-28 y el 2020-03-01, porque el generador sumó 7 años de
+  calendario y perdió el 29 de febrero de 2012). El archivo está ordenado por `unix_time` y no por
+  fecha (1.716 filas con orden distinto), así que ordenar o ventanear con una columna o con la otra
+  da historias distintas. `fraudTest` es consistente en ambas.
 - **Ritmo acelerado** (`--aceleracion`, segundos simulados por segundo real; 0 = sin esperas). Cada
   mensaje se agenda contra el inicio de la reproducción, no como "esperar la diferencia con el
   anterior", para que el error de cada `sleep` no se acumule. Verificado: 41.768 s simulados a x3600
@@ -173,8 +177,9 @@ make tiempo-real-abajo
 Redis no guarda "cuántas transacciones tuvo la tarjeta en las últimas 24 h" ya calculado: ese
 número depende de la hora de la transacción que se autoriza, que todavía no existe cuando se
 actualiza el almacén. Guarda el **estado crudo** de cada tarjeta (`EstadoTarjeta`: marcas y
-montos de las últimas 24 h, acumulado histórico y categorías vistas) y el servicio calcula las
-ventanas al recibir el pedido. Es la vista `estado_tarjeta` de Feast, con un `PushSource` para el
+montos de las últimas 24 h, acumulado histórico, categorías vistas y la ubicación del comercio de
+la última transacción) y el servicio calcula las ventanas, la distancia y la velocidad al recibir
+el pedido. Es la vista `estado_tarjeta` de Feast, con un `PushSource` para el
 streaming.
 
 - **`skip_dedup=True` en el almacén Redis de Feast.** Por defecto Feast descarta un write con
@@ -240,10 +245,49 @@ make streaming-reiniciar                     # vuelve a cero: tópico, checkpoin
   versión de Spark y la de Scala del PySpark instalado; Spark lo baja de Maven Central.
 
 **Validación con los datos reales.** Arranque en frío desde `fraudTrain` + las 555.719 transacciones
-de `fraudTest` por Kafka (56 micro-lotes, 61 s con `--aceleracion 0`): el estado final en Redis es
+de `fraudTest` por Kafka (56 micro-lotes, ~44 s con `--aceleracion 0`): el estado final en Redis es
 **idéntico** al que calcula el batch de Spark sobre `fraudTrain` + `fraudTest` juntos, para las 999
 tarjetas (0 faltantes, 0 distintas). 16 de ellas solo aparecen en `fraudTest`: el streaming las crea
 desde cero y también coinciden.
+
+### Distancia y velocidad respecto de la transacción anterior
+
+Son las dos características "en el momento de la solicitud" del plan (una tarjeta usada en
+Montevideo y 20 minutos después en Madrid): no pueden esperar al micro-lote, así que las calcula el
+servicio a partir de la última ubicación guardada en Redis.
+
+- `distancia_transaccion_anterior_km`: Haversine entre la ubicación del comercio de la
+  transacción anterior y la actual. `velocidad_implicita_kmh`: esa distancia sobre el intervalo.
+- **"Anterior" es la previa de la tarjeta en el orden `(fecha, id)`** (un `lag`), incluso si es del
+  mismo segundo. Así el estado solo guarda la última ubicación. Con un intervalo de 0 s la velocidad
+  es nula (no se puede dividir por cero) y la distancia sí se calcula. Es distinto de las ventanas
+  de tiempo, que sí son estrictamente anteriores; está documentado en `estado_tarjeta.py`.
+- Tres implementaciones de la misma fórmula (pandas, Spark y Python puro) sobre el mismo radio
+  (`caracteristicas/geografia.py`); la prueba de skew las compara.
+- **Propiedad del dataset sintético:** la mediana de distancia entre transacciones consecutivas
+  es ~100 km sin importar cuánto tiempo pasó, y la velocidad tiene una cola larguísima (p99 ~2.070
+  km/h, máximo ~780.000 km/h): el generador ubica los comercios cerca del domicilio sin modelar
+  viajes. Probablemente aporte poca señal y, si se usa en una red neuronal, haga falta transformarla.
+
+**Prueba de training-serving skew con datos reales.** Las 8 características históricas del Parquet
+offline (Spark) contra las que produce la ruta online (`actualizar_estado` +
+`calcular_caracteristicas`) sobre las **1.852.394 transacciones** de `fraudTrain` + `fraudTest`: **0
+celdas distintas de 14.819.152** (tolerancia relativa de 1e-9, y los nulos coinciden en las mismas
+posiciones). La misma prueba, sobre datos sintéticos con empates de segundo y huecos de más de un
+día, pasaba desde antes: **no detectó el problema que la corrida real sí encontró.**
+
+- **Qué encontró:** al principio daba 12.819 celdas distintas (0,09%). La causa era que el batch
+  ordenaba y ventaneaba por `unix_time` mientras que el streaming y el servicio ven la fecha, y
+  ambas columnas no son equivalentes (ver arriba). El batch ahora usa `marca_tiempo`, derivada de
+  `fecha_hora_transaccion` en UTC, con una prueba de regresión que arma dos filas cuyo orden por
+  `unix_time` contradice el orden por fecha.
+- **Otro detalle, benigno:** `pandas.read_csv` con el parser rápido por defecto no siempre redondea
+  bien el último decimal (`43.274585` se leía como `43.274584999999995`), lo que hacía distintas 215
+  tarjetas en un `==` exacto contra Spark. `float_precision="round_trip"` da el mismo `double` que el
+  `cast` de Spark.
+- **Un bug del reinicio:** `make streaming-reiniciar` no borraba las tarjetas que solo existen en
+  `fraudTest`, que conservaban el estado de la corrida anterior (con otro esquema). Ahora vacía la
+  base 0 de Redis antes del arranque en frío.
 
 ## Cómo ejecutarlo en local
 
@@ -277,6 +321,6 @@ completa se hace en GitHub Codespaces.
 | `servicio` | `api` | 1024 MB | ~292 MB en reposo (`docker stats`), con PyTorch y LightGBM cargados en memoria. Queda margen: no se ajustó a la baja para no arriesgar OOM cuando lleguen ráfagas de pedidos concurrentes. |
 | `tiempo-real` | `kafka` (KRaft, un nodo) | 1024 MB (heap JVM `-Xmx512m`) | ~394 MB en reposo con el tópico `transacciones` creado (`docker stats`). |
 | `tiempo-real` | `redis` (8.8, almacén online de Feast) | 256 MB (`maxmemory 192mb`, `noeviction`) | ~6 MB en reposo. Solo guarda el estado de ~1.000 tarjetas. |
-| _(sin Docker, script directo)_ | `make streaming` (Spark `local[4]`, driver 1 GB, conector de Kafka) | `spark.driver.memory=1g` | ~500 MB de RSS pico procesando `fraudTest` completo (555.719 mensajes, 56 lotes, 61 s). En modo continuo: JVM de Spark ~560 MB + Python ~464 MB. Todo el subsistema `tiempo-real` junto (Kafka ~435 MB + Redis ~10 MB + job): ~1,5 GB, dentro del presupuesto de 3-4 GB. |
+| _(sin Docker, script directo)_ | `make streaming` (Spark `local[4]`, driver 1 GB, conector de Kafka) | `spark.driver.memory=1g` | ~500 MB de RSS pico procesando `fraudTest` completo (555.719 mensajes, 56 lotes, ~44 s). En modo continuo: JVM de Spark ~560 MB + Python ~464 MB. Todo el subsistema `tiempo-real` junto (Kafka ~435 MB + Redis ~10 MB + job): ~1,5 GB, dentro del presupuesto de 3-4 GB. |
 | _(sin Docker, script directo)_ | `make arranque-en-frio` (Spark `local[4]` + `materialize`) | `spark.driver.memory=2g` | ~436 MB de RSS pico (`/usr/bin/time -v`), ~32 s sobre 1.296.675 filas de `fraudTrain` (Spark + materialización a Redis). |
 | _(sin Docker, script directo)_ | `make calcular-historico` (JVM de Spark, `local[4]`) | `spark.driver.memory=2g` | ~415 MB de RSS medidos a mitad de corrida (`ps`), lejos del límite de 2 GB. Corre en ~16-20 s sobre 1.852.394 filas. `local[4]`, no `local[*]`: no hace falta acaparar los 12 núcleos de la máquina para un dataset de este tamaño. |
